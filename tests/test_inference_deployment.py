@@ -267,3 +267,171 @@ def test_projection_reader_refuses_unbudgeted_or_malformed_advice(world, monkeyp
     payload = world.policy.model_dump(mode="json") | {"advice": advice}
     world.projection.write_text(json.dumps(payload))
     assert module.read_candidate_policy(world.projection) is None
+
+
+@pytest.fixture
+def private_provider():
+    return {
+        "base_url": "https://192.168.10.20:8443/v1",
+        "budget": {"monthly": {"tokens": 10_000, "seconds": 120}},
+        "share": ["status"],
+    }
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"base_url": "https://provider.lan:8443/v1"},
+        {"base_url": "https://192.168.10.20/v1"},
+        {"budget": {"monthly": {"tokens": 100}}},
+        {"budget": {"monthly": {"tokens": 100, "seconds": 30}, "max_concurrent": 9}},
+        {"share": ["status", "status"]},
+        {"ca_pem": "-----BEGIN PRIVATE KEY-----\nexample\n-----END PRIVATE KEY-----"},
+        {"credential": "forbidden"},
+    ],
+)
+def test_private_policy_rejects_unapproved_inputs(private_provider, changes):
+    with pytest.raises(ValueError):
+        module.PrivateProviderPolicy.model_validate(private_provider | changes)
+
+
+def test_private_overlay_preserves_canonical_api_config(cfg, private_provider):
+    from steward.core.render import _render_private_ai_selection_candidate_vars, render_vars
+
+    wheel = "steward-0.1.0-py3-none-any.whl"
+    args = {
+        "release": {"version": "0.1.0", "wheel": wheel, "files": {wheel: "b" * 64}},
+        "ssh_port": 22,
+    }
+    private = module.PrivateProviderPolicy.model_validate(private_provider)
+    result = _render_private_ai_selection_candidate_vars(cfg, **args, private_provider=private)
+    assert result.pop("steward_inference_candidate") == {
+        "version": 1,
+        "revision": result["steward_config_revision"],
+        "release": "0.1.0",
+        "wheel_sha256": "b" * 64,
+        "private_provider": private.model_dump(mode="json"),
+    }
+    assert result == render_vars(cfg, **args)
+
+
+@pytest.mark.parametrize("access", ["private-lan", "private-loopback"])
+def test_private_advice_preserves_private_admin_profile(cfg, private_provider, access):
+    from steward.core.render import _render_private_ai_selection_candidate_vars, render_vars
+
+    cfg = cfg.model_copy(update={"admin": cfg.admin.model_copy(update={"access": access})})
+    wheel = "steward-0.1.0-py3-none-any.whl"
+    args = {
+        "release": {"version": "0.1.0", "wheel": wheel, "files": {wheel: "b" * 64}},
+        "ssh_port": 22,
+    }
+    private = module.PrivateProviderPolicy.model_validate(
+        private_provider | {"evaluation_window": "Sun 03:00 UTC"}
+    )
+    result = _render_private_ai_selection_candidate_vars(
+        cfg, **args, private_provider=private, advice=True
+    )
+    assert result.pop("steward_inference_candidate")["advice"] is True
+    assert result == render_vars(cfg, **args)
+    with pytest.raises(ValueError, match="private admin access"):
+        module._validate_advice_routes(cfg)
+
+
+def test_private_stage_publish_binds_relay_and_skips_ollama(
+    run, world, private_provider, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from jinja2 import Environment, FileSystemLoader, StrictUndefined
+
+    candidate = run.candidate.model_dump(exclude={"manifest_sha256"}) | {
+        "private_provider": module.PrivateProviderPolicy.model_validate(
+            private_provider
+        ).model_dump(mode="json"),
+        "advice": True,
+    }
+    private_run = module._Run.model_validate({"candidate": candidate, "run_id": run.run_id})
+    assert private_run.model_dump(mode="json") == {"candidate": candidate, "run_id": run.run_id}
+    policy = module.CandidatePolicy(**candidate, generation=run.run_id, ai=Ai(), weekly_window=None)
+    with pytest.raises(ValueError, match="empty canonical AI"):
+        module.CandidatePolicy(
+            **candidate, generation=run.run_id, ai=run.ollama.ai, weekly_window=None
+        )
+    monkeypatch.setattr(module, "_applied_policy", lambda run: policy)
+    monkeypatch.setattr(module, "SYSTEMD_DIR", tmp_path)
+    activations = []
+
+    def systemctl(action, *units):
+        assert world.projection.exists()
+        activations.append((action, units))
+
+    monkeypatch.setattr(module, "_systemctl", systemctl)
+
+    def reject_ollama(*args):
+        pytest.fail("private candidate tried to use an Ollama model receipt")
+
+    monkeypatch.setattr(module, "_installed_model", reject_ollama)
+    templates = Path(__file__).resolve().parents[1] / "ansible/roles/platform/templates"
+    env = Environment(
+        loader=FileSystemLoader(templates), undefined=StrictUndefined, autoescape=True
+    )
+    for name in module.EGRESS_UNITS:
+        unit = env.get_template(f"{name}.j2").render(
+            platform_inference_egress_target=SimpleNamespace(stdout="192.168.10.20 8443"),
+        )
+        (tmp_path / name).write_text(unit)
+    proxy = tmp_path / module.EGRESS_UNITS[1]
+    contents = proxy.read_text()
+    operate("stage", private_run, world)
+    assert not activations
+    proxy.write_text(contents.replace(":8443", ":443"))
+    with pytest.raises(boot.BootError, match="approved endpoint"):
+        operate("publish", private_run, world)
+    assert not world.projection.exists()
+    proxy.write_text(contents)
+    with pytest.raises(boot.BootError, match="proof changed"):
+        operate("publish", private_run, world)
+    operate("stage", private_run, world)
+    operate("publish", private_run, world)
+    assert json.loads(world.projection.read_text()) == policy.model_dump(mode="json")
+    assert activations == [
+        ("start", module.EGRESS_UNITS),
+        ("start", ("steward-inference-advice.service",)),
+        ("enable", (module.EGRESS_UNITS[0], module.PRIVATE_TICK_TIMER)),
+        ("start", (module.PRIVATE_TICK_TIMER,)),
+    ]
+    for name in ("tick", "advice"):
+        unit = env.get_template(f"steward-inference-{name}.service.j2").render(
+            platform_inference_private=True,
+        )
+        assert "PrivateNetwork=yes" in unit
+        assert "RestrictAddressFamilies=AF_UNIX" in unit
+        assert f"BindReadOnlyPaths={module.EGRESS_SOCKET_PATH}" in unit
+        assert "steward-ollama.service" not in unit
+        assert ("_private-candidate-tick" if name == "tick" else "_managed-private-advice") in unit
+    admin = env.get_template("steward-inference-admin.service.j2").render()
+    assert str(module.EGRESS_SOCKET_PATH) not in admin
+    assert "SystemCallFilter=~socket socketpair connect bind listen" in admin
+
+
+def test_revocation_stops_private_relay_before_unlinking(tmp_path, monkeypatch):
+    desired = tmp_path / "config" / "desired.json"
+    projection = tmp_path / "inference" / module.PROJECTION_PATH.name
+    projection.parent.mkdir()
+    projection.touch()
+    for unit in module.EGRESS_UNITS:
+        (tmp_path / unit).touch()
+    monkeypatch.setattr(module, "DESIRED_PATH", desired)
+    monkeypatch.setattr(module, "SYSTEMD_DIR", tmp_path)
+    monkeypatch.setattr(module, "_projection_group", lambda path: 42)
+    monkeypatch.setattr(boot, "protected", lambda path, mode, gid: path.open("rb"))
+    calls = []
+
+    def systemctl(action, *units):
+        assert projection.exists()
+        calls.append((action, units))
+
+    monkeypatch.setattr(module, "_systemctl", systemctl)
+    module.revoke_for_desired(desired)
+    assert calls == [("stop", module.EGRESS_UNITS)]
+    assert not projection.exists()

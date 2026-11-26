@@ -283,12 +283,13 @@ def isolated_site(tmp_path):
                     {
                         "name": "Capture this candidate's deployment payload",
                         "ansible.builtin.set_fact": {
-                            "platform_inference_payload": {
-                                "candidate": "{{ steward_inference_candidate }}",
-                                "ollama": "{{ steward_ollama_local }}",
-                                "run_id": "{{ site_inference_run }}",
-                                "models": str(remote / "models"),
-                            },
+                            "platform_inference_payload": (
+                                "{{ {'candidate': steward_inference_candidate, "
+                                "'run_id': site_inference_run} | combine("
+                                "{'ollama': steward_ollama_local, "
+                                f"'models': '{remote / 'models'}'"
+                                "} if steward_ollama_local is defined else {}) }}"
+                            ),
                         },
                     },
                     {
@@ -830,7 +831,8 @@ def legacy_inference_withdrawal(tmp_path):
                         },
                         "tasks": yaml.safe_load(tasks),
                     }
-                ]
+                ],
+                sort_keys=False,
             )
         )
         env = {key: value for key, value in os.environ.items() if not key.startswith("ANSIBLE_")}
@@ -848,7 +850,7 @@ def legacy_inference_withdrawal(tmp_path):
             capture_output=True,
             text=True,
             env=env,
-            timeout=60,
+            timeout=300,
             check=False,
         )
         commands = (
@@ -904,7 +906,17 @@ def test_legacy_inference_withdrawal_checks_authority_leaves(
         assert "Check optional inference unit files" not in output
         assert commands == []
     else:
-        assert len(commands) == 7
+        assert [command[-1] for command in commands] == [
+            "steward-inference-advice-bot.socket",
+            "steward-inference-advice-api.socket",
+            "steward-inference-advice.service",
+            "steward-inference-tick.timer",
+            "steward-inference-tick.service",
+            "steward-inference-admin.socket",
+            "steward-inference-admin.service",
+            "steward-inference-egress.socket",
+            "steward-inference-egress.service",
+        ]
         assert all(command[:2] == [str(systemctl), "show"] for command in commands)
 
 
@@ -931,8 +943,8 @@ def test_legacy_inference_withdrawal_rejects_unsafe_directory(legacy_inference_w
     assert commands == []
 
 
-def inference_candidate_vars():
-    return {
+def inference_candidate_vars(private=False):
+    variables = {
         "steward_base_revision": REVISION,
         "steward_ollama_local": {"ai": {"provider": "ollama"}, "reserved_memory_mb": 128},
         "steward_inference_candidate": {
@@ -950,11 +962,30 @@ def inference_candidate_vars():
         },
     }
 
+    if private:
+        del variables["steward_ollama_local"]
+        candidate = variables["steward_inference_candidate"]
+        del candidate["manifest_sha256"]
+        candidate["private_provider"] = {
+            "base_url": "https://192.168.10.20:8443/v1",
+            "budget": {"monthly": {"tokens": 10_000, "seconds": 120}},
+        }
+    return variables
 
-@pytest.mark.parametrize("failure", ["", "check-base", "stage", "verify", "record-deployment"])
-def test_inference_site_publication_follows_verification_and_recording(isolated_site, failure):
+
+@pytest.mark.parametrize(
+    ("failure", "private"),
+    [(failure, False) for failure in ("", "check-base", "stage", "verify", "record-deployment")]
+    + [
+        pytest.param("", True, id="private-https"),
+        pytest.param("verify", True, id="private-verify-failure"),
+    ],
+)
+def test_inference_site_publication_follows_verification_and_recording(
+    isolated_site, failure, private
+):
     run, marker, payload = isolated_site
-    result, operations, _ = run(schema=1, extra=inference_candidate_vars(), failure=failure)
+    result, operations, _ = run(schema=1, extra=inference_candidate_vars(private), failure=failure)
     assert result.returncode == (2 if failure else 0), result.stdout + result.stderr
     expected = [
         "withdraw-probe",
@@ -975,7 +1006,9 @@ def test_inference_site_publication_follows_verification_and_recording(isolated_
     if failure:
         assert json.loads(deployment_marker.read_text()) == withdrawn_marker
     else:
-        assert operations[2][3] == operations[-1][3]
+        staged = operations[2][3]
+        assert staged == operations[-1][3]
+        assert {"ollama", "models"} & staged.keys() == (set() if private else {"ollama", "models"})
         assert not deployment_marker.exists()
         assert payload.exists()
 

@@ -1,9 +1,9 @@
 """InferenceProvider v1 adapters for Ollama, OpenAI, Anthropic and compatible APIs.
 
 Transports are bounded and never follow redirects or environment proxies. Local
-adapters only ever connect to loopback addresses; external adapters connect to the
-exact public address that was checked (TLS verified against the original host
-name). Errors map to the stable classes of `core/inference.py` and never contain
+adapters connect to loopback addresses. External transports use checked public
+addresses or a fixed managed Unix relay with end-to-end TLS. Errors map to the
+stable classes of `core/inference.py` and never contain
 URLs, response bodies or credentials. Official API shapes were written from
 provider documentation knowledge and must be re-verified by the provider gates in
 `tests/integration/gates/m6_ai.md` before any acceptance claim.
@@ -14,6 +14,8 @@ from __future__ import annotations
 import contextlib
 import http.client
 import json
+import math
+import os
 import socket
 import ssl
 import time
@@ -31,7 +33,7 @@ from ..core.inference import (
     RawCompletion,
     Usage,
 )
-from ..core.inference_endpoint import is_loopback_host, parse
+from ..core.inference_endpoint import canonical_private_https_url, is_loopback_host, parse
 from ..core.inference_schema import wire_schema
 from ..core.secrets import SecretError, resolve
 from .notifications import UnsafeTarget, public_addresses
@@ -132,6 +134,7 @@ class _Base:
         *,
         max_response_bytes=MAX_RESPONSE,
         check_admission=None,
+        send_guard=None,
     ):
         try:
             if check_admission is not None:
@@ -141,9 +144,10 @@ class _Base:
             except (OSError, http.client.HTTPException):
                 raise TransportError("connect") from None
             try:
-                if check_admission is not None:
-                    check_admission()
-                conn.request(method, path, body, headers)
+                with send_guard() if send_guard is not None else contextlib.nullcontext():
+                    if check_admission is not None:
+                        check_admission()
+                    conn.request(method, path, body, headers)
                 response = conn.getresponse()
                 data = bytearray()
                 while True:
@@ -275,6 +279,125 @@ class _ManagedOllamaTransport(_Base):
 
     def _connection(self, endpoint, deadline):
         return _ManagedOllamaConnection(endpoint, deadline)
+
+
+def _remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError
+    return remaining
+
+
+class _DeadlineTlsSocket(ssl.SSLSocket):
+    deadline: float
+
+    def send(self, data, flags=0):
+        self.settimeout(_remaining(self.deadline))
+        return super().send(data, flags)
+
+    def recv_into(self, buffer, nbytes=0, flags=0):
+        self.settimeout(_remaining(self.deadline))
+        return super().recv_into(buffer, nbytes, flags)
+
+
+class _ManagedPrivateHttpsResponse(http.client.HTTPResponse):
+    def read(self, amt=None):
+        data = super().read(amt)
+        # Bounded HTTPResponse.read calls otherwise return EOF for a short body.
+        if amt != 0 and not data and self.length:
+            raise http.client.IncompleteRead(data, self.length)
+        return data
+
+
+class _ManagedPrivateHttpsConnection(http.client.HTTPConnection):
+    # HTTPConnection builds an origin-form request. Always include the explicit port.
+    default_port = None
+    response_class = _ManagedPrivateHttpsResponse
+
+    def __init__(
+        self, endpoint: Endpoint, socket_path: str, context: ssl.SSLContext, deadline: float
+    ):
+        super().__init__(endpoint.host, endpoint.port)
+        self._socket_path = socket_path
+        self._context = context
+        self._deadline = deadline
+
+    def connect(self) -> None:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as raw:
+            raw.settimeout(_remaining(self._deadline))
+            raw.connect(self._socket_path)
+            tls = self._context.wrap_socket(
+                raw,
+                server_hostname=self.host,
+                do_handshake_on_connect=False,
+            )
+        self.sock = tls
+        tls.deadline = self._deadline
+        tls.settimeout(_remaining(self._deadline))
+        tls.do_handshake()
+        _remaining(self._deadline)
+
+
+class ManagedPrivateHttpsTransport(_Base):
+    """Fixed OpenAI-compatible endpoint reached through an installed Unix relay."""
+
+    def __init__(
+        self,
+        base_url: str,
+        socket_path: str | os.PathLike[str],
+        *,
+        ca_pem: str | bytes | None = None,
+        check_admission: Callable[[], None] | None = None,
+        send_guard: Callable[[], contextlib.AbstractContextManager[None]] | None = None,
+    ):
+        self._base_url = canonical_private_https_url(base_url)
+        self._endpoint = Endpoint.from_url(self._base_url)
+        self._check_admission = check_admission
+        self._send_guard = send_guard
+        self._socket_path = os.fspath(socket_path)
+        if not os.path.isabs(self._socket_path) or "\x00" in self._socket_path:
+            raise ValueError("invalid managed relay socket path")
+        self._context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        if ca_pem is None:
+            self._context.load_default_certs()
+        else:
+            self._context.load_verify_locations(
+                cadata=ca_pem.decode("ascii") if isinstance(ca_pem, bytes) else ca_pem
+            )
+        self._context.sslsocket_class = _DeadlineTlsSocket
+
+    def request(self, endpoint, method, path, headers, body, *, timeout):
+        if (
+            endpoint != self._endpoint
+            or (method, path) not in (("GET", "/models"), ("POST", "/chat/completions"))
+            or any(name.lower() in ("host", "cache-control") for name in headers)
+        ):
+            raise TransportError("unsafe")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise TransportError("connect")
+        deadline = time.monotonic() + timeout
+        conn = _ManagedPrivateHttpsConnection(endpoint, self._socket_path, self._context, deadline)
+        response = self._exchange(
+            conn,
+            endpoint.prefix + path,
+            method,
+            {**headers, "Cache-Control": "no-store, no-cache"},
+            body,
+            deadline,
+            check_admission=self._check_admission,
+            send_guard=self._send_guard,
+        )
+        # Older HTTPS gateways use EOF to delimit a JSON response. TLS still
+        # authenticates every received record, and only a complete object may
+        # succeed. HTTPResponse separately rejects short framed bodies.
+        if (
+            200 <= response.status < 300
+            and "content-length" not in response.headers
+            and "transfer-encoding" not in response.headers
+            and _json_body(response.body) is None
+        ):
+            raise TransportError("io")
+        return response
 
 
 # ---- shared provider plumbing -----------------------------------------------------------
@@ -642,6 +765,10 @@ class OpenAICompatibleProvider(_ChatCompletions):
         transport: Transport | None = None,
         **kw,
     ):
+        if isinstance(transport, ManagedPrivateHttpsTransport):
+            base_url = canonical_private_https_url(base_url)
+            if base_url != transport._base_url:
+                raise ValueError("provider URL must match the managed private HTTPS endpoint")
         endpoint = Endpoint.from_url(base_url)
         local = is_loopback_host(endpoint.host)
         super().__init__(

@@ -10,6 +10,8 @@
       steward-inference-tick.service: Steward local model scan
       steward-inference-admin.socket: Steward inference administration socket
       steward-inference-admin.service: Steward inference administration worker
+      steward-inference-egress.socket: Steward private inference egress socket
+      steward-inference-egress.service: Steward private inference egress relay
   block:
     - name: Inspect the inference authority directory
       ansible.builtin.stat:
@@ -188,7 +190,7 @@
       ansible.builtin.file:
         path: "/etc/systemd/system/{{ item }}"
         state: absent
-      loop: "{{ platform_inference_owned_units | select('match', '^steward-inference-(advice[.-]|tick[.]service$)') | list }}"
+      loop: "{{ platform_inference_owned_units | select('match', '^steward-inference-(advice[.-]|egress[.]|tick[.]service$)') | list }}"
       register: platform_inference_retired
 
     - name: Reload systemd without the retired inference fragments
@@ -203,12 +205,19 @@
     platform_inference_advice_sockets:
       - steward-inference-advice-bot.socket
       - steward-inference-advice-api.socket
+    platform_inference_private: "{{ steward_inference_candidate.private_provider is defined }}"
+    platform_inference_egress_units:
+      - steward-inference-egress.socket
+      - steward-inference-egress.service
   block:
-    - name: Require this run and a successful Ollama installer result
+    - name: Require this inference deployment run
       ansible.builtin.assert:
-        that:
-          - site_inference_run is match('^[0-9a-f]{32}\\Z')
-          - platform_ollama_install.rc == 0
+        that: site_inference_run is match('^[0-9a-f]{32}\\Z')
+
+    - name: Require a successful Ollama installer result
+      ansible.builtin.assert:
+        that: platform_ollama_install.rc == 0
+      when: not platform_inference_private
 
     - name: Bind inference staging to this deployment and installed model store
       ansible.builtin.set_fact:
@@ -217,6 +226,22 @@
           ollama: "{{ steward_ollama_local }}"
           run_id: "{{ site_inference_run }}"
           models: "{{ (platform_ollama_install.stdout | from_json).models }}"
+      when: not platform_inference_private
+
+    - name: Bind private HTTPS staging to this deployment
+      ansible.builtin.set_fact:
+        platform_inference_payload:
+          candidate: "{{ steward_inference_candidate }}"
+          run_id: "{{ site_inference_run }}"
+      when: platform_inference_private
+
+    - name: Validate private HTTPS policy and check relay socket custody
+      ansible.builtin.command:
+        argv: [/opt/steward/current/venv/bin/python, -I, -m, steward.core.inference_deployment, private-egress-preflight]
+        stdin: "{{ platform_inference_payload | to_json }}"
+      register: platform_inference_egress_target
+      changed_when: false
+      when: platform_inference_private
 
     - name: Check the managed Ollama namespace source after installation
       ansible.builtin.command:
@@ -233,6 +258,7 @@
         (['LoadState=loaded', 'ActiveState=active', 'FragmentPath=/etc/systemd/system/steward-ollama.service',
           'DropInPaths=', 'NeedDaemonReload=no', 'PrivateNetwork=yes', 'NetworkNamespacePath=', 'JoinsNamespaceOf=']
          | difference(platform_inference_ollama.stdout_lines) | length > 0)
+      when: not platform_inference_private
 
     - name: Check that the inference socket path is unoccupied
       ansible.builtin.command:
@@ -266,7 +292,9 @@
       ansible.builtin.getent:
         database: passwd
         key: "{{ item }}"
-      loop: "{{ ['steward-inference', 'steward-api', 'steward-ai'] + (['steward-bot'] if platform_inference_advice else []) }}"
+      loop: >-
+        {{ ['steward-inference', 'steward-api'] + (['steward-ai'] if not platform_inference_private else [])
+           + (['steward-bot'] if platform_inference_advice else []) }}
       register: platform_inference_identities
 
     - name: Require distinct non-root inference service and client UIDs
@@ -279,13 +307,6 @@
           {{ platform_inference_identities.results | map(attribute='ansible_facts.getent_passwd')
              | map('dict2items') | map('first') | map(attribute='value.1') | map('int') | list }}
 
-    - name: Stage a protected proof of the current model installation
-      ansible.builtin.command:
-        argv: [/opt/steward/current/venv/bin/python, -I, -m, steward.core.inference_deployment, stage]
-        stdin: "{{ platform_inference_payload | to_json }}"
-      register: platform_inference_staged
-      changed_when: true
-
     - name: Install the private inference unit definitions
       ansible.builtin.template:
         src: "{{ item }}.j2"
@@ -297,7 +318,8 @@
         {{ ['steward-inference-admin.service', 'steward-inference-admin.socket',
             'steward-inference-tick.service', 'steward-inference-tick.timer'] +
            (platform_inference_advice_sockets + ['steward-inference-advice.service']
-            if platform_inference_advice else []) }}
+            if platform_inference_advice else []) +
+           (platform_inference_egress_units if platform_inference_private else []) }}
       register: platform_inference_units
 
     - name: Reload installed private inference units
@@ -322,21 +344,31 @@
         (['LoadState=loaded', 'FragmentPath=/etc/systemd/system/' ~ item.item, 'DropInPaths=', 'NeedDaemonReload=no']
          | difference(platform_inference_new_source.stdout_lines) | length > 0)
 
-    - name: Require the advice worker to join only the verified Ollama namespace
+    - name: Require the worker network namespace to match its candidate
       ansible.builtin.command:
         argv:
           - /usr/bin/systemctl
           - show
           - --all
           - --property=PrivateNetwork,NetworkNamespacePath,JoinsNamespaceOf
-          - steward-inference-advice.service
-      register: platform_inference_advice_namespace
+          - "{{ item }}"
+      register: platform_inference_namespace
       changed_when: false
       failed_when: >-
-        platform_inference_advice_namespace.rc != 0 or
-        (['PrivateNetwork=yes', 'NetworkNamespacePath=', 'JoinsNamespaceOf=steward-ollama.service']
-         | difference(platform_inference_advice_namespace.stdout_lines) | length > 0)
-      when: platform_inference_advice
+        platform_inference_namespace.rc != 0 or
+        (['PrivateNetwork=yes', 'NetworkNamespacePath=',
+          ('JoinsNamespaceOf=' ~ ('' if platform_inference_private else 'steward-ollama.service'))]
+         | difference(platform_inference_namespace.stdout_lines) | length > 0)
+      loop: >-
+        {{ (['steward-inference-tick.service'] if platform_inference_private else []) +
+           (['steward-inference-advice.service'] if platform_inference_advice else []) }}
+
+    - name: Stage a protected proof of the current inference installation
+      ansible.builtin.command:
+        argv: [/opt/steward/current/venv/bin/python, -I, -m, steward.core.inference_deployment, stage]
+        stdin: "{{ platform_inference_payload | to_json }}"
+      register: platform_inference_staged
+      changed_when: true
 
     - name: Start the candidate listener and timer before publishing authority
       block:
@@ -346,14 +378,15 @@
             enabled: true
             state: started
           loop: >-
-            {{ ['steward-inference-admin.socket', 'steward-inference-tick.timer'] +
+            {{ ['steward-inference-admin.socket'] +
+               (['steward-inference-tick.timer'] if not platform_inference_private else []) +
                (platform_inference_advice_sockets if platform_inference_advice else []) }}
 
         - name: Check joint advice worker startup with both named listeners
           ansible.builtin.systemd_service:
             name: steward-inference-advice.service
             state: started
-          when: platform_inference_advice
+          when: platform_inference_advice and not platform_inference_private
 
         - name: Record successful inference unit startup for this run
           ansible.builtin.set_fact:
@@ -377,7 +410,8 @@
             {{ (platform_inference_advice_sockets + ['steward-inference-advice.service']
                 if platform_inference_advice else []) +
                ['steward-inference-tick.timer', 'steward-inference-tick.service',
-                'steward-inference-admin.socket', 'steward-inference-admin.service'] }}
+                'steward-inference-admin.socket', 'steward-inference-admin.service'] +
+               (platform_inference_egress_units if platform_inference_private else []) }}
 
         - name: Fail the deployment before publication
           ansible.builtin.fail:

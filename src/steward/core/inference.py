@@ -183,17 +183,20 @@ class Completion:
     untrusted: bool = True  # always: validated shape, unverified content
 
 
-def parse_output(task: Task, raw: RawCompletion) -> dict:
-    if len(raw.text.encode()) > MAX_OUTPUT_BYTES:
-        raise InferenceError("invalid_output", spend="known", usage=raw.usage)
-    text = raw.text.strip()
+def decode_output(text: str) -> object:
+    if len(text.encode()) > MAX_OUTPUT_BYTES:
+        raise ValueError("inference output exceeds the byte limit")
+    text = text.strip()
     if text.startswith("```"):  # tolerate a single fenced block, nothing else
         lines = text.splitlines()
         if len(lines) >= 3 and lines[-1].strip() == "```":
             text = "\n".join(lines[1:-1])
+    return json.loads(text, parse_constant=_reject_constant)
+
+
+def parse_output(task: Task, raw: RawCompletion) -> dict:
     try:
-        value = json.loads(text, parse_constant=_reject_constant)
-        return validate(value, task.schema)
+        return validate(decode_output(raw.text), task.schema)
     except (ValueError, RecursionError, SchemaError):
         raise InferenceError("invalid_output", spend="known", usage=raw.usage) from None
 

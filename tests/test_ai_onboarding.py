@@ -449,3 +449,160 @@ def test_stale_exchange_rate_stops_cost_limited_evaluation_and_keeps_the_model(t
     stale = run(lambda now: False, "a")
     assert stale.status == "kept" and "incumbent_evaluation_incomplete" in stale.decision.reasons
     assert h.world["calls"] == []  # denied before any provider call
+
+
+PRIVATE_URL = "https://gateway.internal/v1"
+
+
+def test_private_provider_stages_durably_and_publishes_scoped_models(ob):
+    key = "secret-private-onboarding-key"
+    with ob.control():
+        pending = ob.stage_private_provider(
+            PRIVATE_URL, key, expected_choice_id=None, replace=False, generation="gen-a"
+        )
+    assert ob.state()["status"] == "none"
+    assert ob.state()["private_pending"] == pending
+    assert key not in str(ob.state())
+    assert key.encode() not in (ob.base / "onboarding.db").read_bytes()
+    credentials = list((ob.base / "provider-credentials").iterdir())
+    assert len(credentials) == 1
+    assert credentials[0].stat().st_mode & 0o777 == 0o600
+
+    reopened = Onboarding(ob.base, ob.selection, ob.sources)
+    assert reopened.resolve_private_key(pending["key_ref"]) == key
+    with pytest.raises(OnboardingError, match="private_provider_pending_changed"):
+        reopened.finish_private_provider(pending["id"], "wrong-gen", models=["vendor/model"])
+    assert reopened.state()["private_pending"] == pending
+    with pytest.raises(OnboardingError, match="applied_policy_changed"):
+        reopened.finish_private_provider(
+            pending["id"],
+            "gen-a",
+            models=["vendor/model"],
+            publish_guard=lambda: "applied_policy_changed",
+        )
+    assert reopened.state()["private_pending"] == pending
+    state = reopened.finish_private_provider(
+        pending["id"], "gen-a", models=["vendor/model", "vendor/model", "bad ID", key]
+    )
+    assert state["provider"] == "openai-compatible"
+    assert state["status"] == "scanned"
+    assert state["base_url"] == PRIVATE_URL
+    assert state["generation"] == "gen-a"
+    assert state["key_ref"] == pending["key_ref"]
+    assert state["private_pending"] is None
+    assert state["scanned"]["models"] == ["vendor/model"]
+    assert reopened.pick_initial("vendor/model")["status"] == "ready"
+    assert reopened.view()["active"]["model"] == "vendor/model"
+
+
+def test_private_provider_failed_rotation_preserves_active_choice_and_key(ob):
+    first = ob.stage_private_provider(
+        PRIVATE_URL, "old-key", expected_choice_id=None, replace=False, generation="gen-a"
+    )
+    ob.finish_private_provider(first["id"], "gen-a", models=["first"])
+    active = ob.pick_initial("first")
+    with pytest.raises(OnboardingError, match="choice_changed"):
+        ob.stage_private_provider(
+            PRIVATE_URL, "stale-key", expected_choice_id=None, replace=True, generation="gen-a"
+        )
+    with pytest.raises(OnboardingError, match="provider_already_chosen"):
+        ob.stage_private_provider(
+            PRIVATE_URL,
+            "new-key",
+            expected_choice_id=active["choice_id"],
+            replace=False,
+            generation="gen-a",
+        )
+    rejected = ob.stage_private_provider(
+        PRIVATE_URL,
+        "new-key",
+        expected_choice_id=active["choice_id"],
+        replace=True,
+        generation="gen-a",
+    )
+    failed = ob.finish_private_provider(rejected["id"], "gen-a", error="upstream echoed new-key")
+    assert failed == active | {
+        "private_pending": rejected | {"status": "failed", "error": "provider_validation_failed"}
+    }
+    assert ob.view()["active"]["model"] == "first"
+    assert ob.resolve_private_key(first["key_ref"]) == "old-key"
+    with pytest.raises(OnboardingError, match="private_key_unavailable"):
+        ob.resolve_private_key(rejected["key_ref"])
+    with pytest.raises(OnboardingError, match="private_provider_pending_changed"):
+        ob.finish_private_provider(rejected["id"], "gen-a", models=["second"])
+
+
+def test_private_provider_rotation_recovers_cleanup_after_publication(ob, monkeypatch):
+    first = ob.stage_private_provider(
+        PRIVATE_URL, "old-key", expected_choice_id=None, replace=False, generation="gen-a"
+    )
+    active = ob.finish_private_provider(first["id"], "gen-a", models=["first"])
+    args = {"expected_choice_id": active["choice_id"], "replace": True}
+    superseded = ob.stage_private_provider(PRIVATE_URL, "discarded-key", generation="gen-b", **args)
+    with pytest.raises(OnboardingError, match="request_in_progress"):
+        ob.stage_private_provider(PRIVATE_URL, "duplicate-key", generation="gen-b", **args)
+    second = ob.stage_private_provider(PRIVATE_URL, "new-key", generation="gen-c", **args)
+    with pytest.raises(OnboardingError, match="private_key_unavailable"):
+        ob.resolve_private_key(superseded["key_ref"])
+    with pytest.raises(OnboardingError, match="private_provider_pending_changed"):
+        ob.finish_private_provider(superseded["id"], "gen-b", models=["old"])
+
+    with monkeypatch.context() as patch:
+        # Simulate an interruption after commit and before obsolete keys are pruned.
+        patch.setattr(ob, "_cleanup_private_keys", lambda: None)
+        ob.finish_private_provider(second["id"], "gen-c", models=["second"])
+    assert ob.resolve_private_key(first["key_ref"]) == "old-key"
+
+    restarted = Onboarding(ob.base, ob.selection, ob.sources)
+    with pytest.raises(OnboardingError, match="private_key_unavailable"):
+        restarted.resolve_private_key(first["key_ref"])
+    with pytest.raises(OnboardingError, match="private_provider_pending_changed"):
+        restarted.finish_private_provider(second["id"], "gen-c", models=["second"])
+    assert restarted.state()["key_ref"] == second["key_ref"]
+    assert restarted.resolve_private_key(second["key_ref"]) == "new-key"
+
+
+def test_private_provider_verified_rotation_preserves_selection_and_report(ob):
+    first = ob.stage_private_provider(
+        PRIVATE_URL, "old-key", expected_choice_id=None, replace=False, generation="gen-a"
+    )
+    ob.finish_private_provider(first["id"], "gen-a", models=["first"])
+    old = ob.pick_initial("first")
+    report = ob.ensure_report(lambda model: {"passed": True, "model": model})
+    active = ob.view()["active"]
+
+    second = ob.stage_private_provider(
+        PRIVATE_URL,
+        "new-key",
+        expected_choice_id=old["choice_id"],
+        replace=True,
+        generation="gen-a",
+    )
+    new = ob.finish_private_provider(second["id"], "gen-a", models=["first", "second"])
+    assert new["private_revision"] == second["id"]
+    assert new["choice_id"] == old["choice_id"]
+    assert ob.view()["active"] == active
+    assert ob.latest_report() == report
+    with pytest.raises(OnboardingError, match="choice_changed"):
+        ob.stage_private_provider(
+            PRIVATE_URL,
+            "stale-key",
+            expected_choice_id=old["choice_id"],
+            replace=True,
+            generation="gen-a",
+        )
+
+
+def test_private_provider_rejects_generic_choice_and_invalid_scan(ob):
+    with pytest.raises(OnboardingError, match="private_provider_setup_required"):
+        ob.choose_provider("openai-compatible", key_ref="env:OTHER_KEY")
+    with pytest.raises(OnboardingError, match="private_key_unavailable"):
+        ob.resolve_private_key("file:/arbitrary-path")
+    pending = ob.stage_private_provider(
+        PRIVATE_URL, "staged-key", expected_choice_id=None, replace=False, generation="gen-a"
+    )
+    failed = ob.finish_private_provider(pending["id"], "gen-a", models=["invalid model"])
+    assert failed["status"] == "none"
+    assert failed["private_pending"]["status"] == "failed"
+    with pytest.raises(OnboardingError, match="private_key_unavailable"):
+        ob.resolve_private_key(pending["key_ref"])

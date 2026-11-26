@@ -7,22 +7,26 @@ import threading
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import uvicorn
 from fastapi import HTTPException, Request
 
 from steward import __version__, collector, inference_worker
+from steward.adapters.inference import HttpResponse, ManagedPrivateHttpsTransport
 from steward.api import app as api
 from steward.core import ipc
 from steward.core.advice import gather
 from steward.core.advice_ipc import AdvicePeer
+from steward.core.ai_admin_ipc import AdminPeer
 from steward.core.ai_onboarding import Onboarding
 from steward.core.canonical import revision_id
-from steward.core.config import ROOT_EXAMPLES, AiBudget, effective, load_config_file
+from steward.core.config import ROOT_EXAMPLES, Ai, AiBudget, effective, load_config_file
 from steward.core.config_apply import plan_apply
 from steward.core.events import Event, EventStore
 from steward.core.inference import Policy, RawCompletion, Usage
 from steward.core.inference_budget import Ledger
+from steward.core.inference_deployment import PrivateProviderPolicy
 from steward.core.inventory import Inventory
 from steward.core.model_selection import SelectionStore
 from steward.core.model_sources import SourceStore
@@ -115,6 +119,95 @@ def apply_handler(desired: Path, export: Path, release_apply: threading.Event):
         }
 
     return handle
+
+
+PRIVATE_ORIGIN = "http://127.0.0.1:19080"
+PRIVATE_URL = "https://10.0.0.4:8443/v1"
+
+
+def private_provider_response(transport, endpoint, method, path, headers, body, *, timeout):
+    # Keep admission, credential resolution, provider parsing and publication real.
+    assert endpoint == transport._endpoint and (method, path) == ("GET", "/models")
+    assert timeout > 0 and transport._check_admission is not None
+    transport._check_admission()
+    authorization = headers["Authorization"]
+    if authorization == "Bearer fixture-first-key":
+        return HttpResponse(401, {}, authorization.encode())
+    assert authorization in {
+        "Bearer fixture-second-key",
+        "Bearer fixture-rotated-key",
+        "Bearer fixture-concurrent-key",
+    }
+    models = ("fixture-alternate", "fixture-selected", authorization.removeprefix("Bearer "))
+    return HttpResponse(200, {}, json.dumps({"data": [{"id": model} for model in models]}).encode())
+
+
+def compatible_fixture(state: Path, desired: Path):
+    uid = os.geteuid()
+    worker_state = state / "compatible-worker"
+    socket_path = state / "compatible.sock"
+    policy = inference_worker.AppliedPolicy(
+        revision=revision_id(json.loads(desired.read_text())),
+        ai=Ai(),
+        weekly_window=None,
+        generation="a" * 32,
+        private_provider=PrivateProviderPolicy(
+            base_url=PRIVATE_URL, budget=AiBudget(monthly={"tokens": 3000, "seconds": 60})
+        ),
+    )
+
+    def read_policy():
+        return policy
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(str(socket_path))
+        listener.listen(2)
+        # The disposable directory is private to this process's UID. The managed
+        # installation's root-owned ancestor check cannot pass under /tmp.
+        with patch.object(
+            inference_worker,
+            "_trusted_directory",
+            lambda path: (
+                path == state and path.stat().st_uid == uid and path.stat().st_mode & 0o077 == 0
+            ),
+        ):
+            server = inference_worker.make_admin_server(
+                listener,
+                socket_path=socket_path,
+                state_dir=worker_state,
+                admin_uid=uid,
+                read_policy=read_policy,
+                candidate=True,
+            )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    app = api.create_app(
+        api.Settings(
+            state_dir=state / "compatible-api",
+            allowed_origins=(PRIVATE_ORIGIN,),
+            token=TOKEN,
+            desired_config=desired,
+            start_worker=False,
+            ai_peer=AdminPeer(str(socket_path), uid),
+        )
+    )
+
+    @app.post("/__browser_fixture__/compatible-tick")
+    def compatible_tick(request: Request):
+        if request.headers.get("x-browser-fixture-token") != TOKEN:
+            raise HTTPException(403)
+        with patch.object(ManagedPrivateHttpsTransport, "request", private_provider_response):
+            result = inference_worker.run_once(
+                read_policy=read_policy,
+                state_dir=worker_state,
+                kill_switch=lambda: False,
+                candidate_policy=policy,
+            )
+        if result["status"] != "ok":
+            raise HTTPException(500, "compatible fixture tick failed")
+        return {"ok": True}
+
+    return app, server, thread
 
 
 def main():
@@ -402,9 +495,25 @@ def main():
                 raise HTTPException(403)
             release_apply.set()
 
+        compatible_app, compatible_server, compatible_thread = compatible_fixture(state, desired)
+
+        async def browser_app(scope, receive, send):
+            # Use a separate loopback origin and session for the managed mode.
+            backend = (
+                compatible_app
+                if (scope["type"] == "http" and (b"host", b"127.0.0.1:19080") in scope["headers"])
+                else app
+            )
+            await backend(scope, receive, send)
+
         try:
-            uvicorn.run(app, host="127.0.0.1", port=19080, access_log=False, log_level="warning")
+            uvicorn.run(
+                browser_app, host="127.0.0.1", port=19080, access_log=False, log_level="warning"
+            )
         finally:
+            compatible_server.shutdown()
+            compatible_server.server_close()
+            compatible_thread.join()
             release_apply.set()
             if runner.ident is not None:
                 runner.join(timeout=20)

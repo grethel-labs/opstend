@@ -26,11 +26,14 @@ import json
 import os
 import re
 import sqlite3
+import stat
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from dataclasses import replace as replace_fields
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +42,13 @@ from .config import Ai, AiLocal
 from .inference import InferenceError, InferenceService, Policy
 from .inference_budget import Ledger, Price
 from .inference_local import LocalInstallRejected, plan_local_install
-from .inference_models import HINTS_STATUS, PROVIDER_OPTIONS, family_of, suggest_default
+from .inference_models import (
+    HINTS_STATUS,
+    PRIVATE_PROVIDER,
+    PROVIDER_OPTIONS,
+    family_of,
+    suggest_default,
+)
 from .model_selection import (
     Decision,
     Measurement,
@@ -51,6 +60,12 @@ from .model_selection import (
 )
 from .model_sources import SourceStore
 from .model_suite import SUITE_DATA_CLASS, SUITE_REVISION, cases, grade, scope
+
+PRIVATE_KEY_REF = re.compile(r"private:[a-f0-9]{32}")
+PRIVATE_SCAN_ERRORS = frozenset({"endpoint_mismatch", "private_provider_unavailable"})
+ONBOARDING_OPTIONS = PROVIDER_OPTIONS | {
+    PRIVATE_PROVIDER: replace_fields(PROVIDER_OPTIONS[PRIVATE_PROVIDER], adapter=PRIVATE_PROVIDER),
+}
 
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 SECRET_REF = re.compile(r"^(env:[A-Za-z_][A-Za-z0-9_]*|file:[^\x00\n]+)$")
@@ -106,7 +121,13 @@ def _empty_state() -> dict[str, Any]:
         "provider": None, "status": "none", "key_ref": None, "local": None, "scanned": None,
         "auto": False, "pinned": None, "report_due": None, "initial_checked": False,
         "download_confirmed": False, "choice_id": None,
+        "base_url": None, "generation": None, "private_pending": None, "private_revision": None,
     }  # fmt: skip
+
+
+def provider_choice_id(state: dict[str, Any]) -> str | None:
+    """Version a credential change without rebinding the model and report history."""
+    return state["private_revision"] or state["choice_id"]
 
 
 class Onboarding:
@@ -124,6 +145,8 @@ class Onboarding:
         self.base.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.selection, self.sources, self.clock, self._audit = selection, sources, clock, audit
         self.auth_methods = auth_methods if auth_methods is not None else AUTH_METHODS
+        self._control_owner = threading.local()
+        self._private_keys = self.base / "provider-credentials"
         self._path = str(self.base / "onboarding.db")
         self._idem_path = str(self.base / "idempotency.db")
         for path, schema in ((self._path, SCHEMA), (self._idem_path, IDEM_SCHEMA)):
@@ -140,14 +163,21 @@ class Onboarding:
                 }:
                     db.execute(f"ALTER TABLE {table} ADD COLUMN choice_id TEXT")
 
+            self._prune_private_keys(self._load(db))
+
     @contextmanager
     def control(self):
         """Serialize short control changes and publication across processes."""
+        if getattr(self._control_owner, "held", False):
+            yield
+            return
         fd = os.open(self.base / ".control.lock", os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
+            self._control_owner.held = True
             yield
         finally:
+            self._control_owner.held = False
             os.close(fd)
 
     @contextmanager
@@ -259,6 +289,8 @@ class Onboarding:
         host: HostFacts | None = None,
         replace: bool = False,
     ) -> dict[str, Any]:
+        if option_id == PRIVATE_PROVIDER:
+            raise OnboardingError("private_provider_setup_required")
         option = PROVIDER_OPTIONS.get(option_id)
         if option is None:
             raise OnboardingError("unknown_provider")
@@ -282,12 +314,193 @@ class Onboarding:
                 "provider": option.id, "status": "provider_chosen", "key_ref": key_ref,
                 "local": plan, "choice_id": uuid.uuid4().hex,
             }  # fmt: skip
-            db.execute(
-                "UPDATE requests SET state='failed', result=CASE WHEN choice_id IS NULL "
-                "THEN 'resubmit_required' ELSE 'choice_changed' END WHERE state='pending'"
-            )
-            self._save(db, state)
+            self._publish_choice(db, state)
+        self._cleanup_private_keys()
         self._emit("provider_chosen", provider=option.id, data_class=option.data_class)
+        return state
+
+    def _publish_choice(self, db: sqlite3.Connection, state: dict[str, Any]) -> None:
+        db.execute(
+            "UPDATE requests SET state='failed', result=CASE WHEN choice_id IS NULL "
+            "THEN 'resubmit_required' ELSE 'choice_changed' END WHERE state='pending'"
+        )
+        self._save(db, state)
+
+    @staticmethod
+    def _sync_directory(path: Path) -> None:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def _write_private_key(self, ref: str, api_key: str) -> None:
+        self._private_keys.mkdir(mode=0o700, exist_ok=True)
+        path = self._private_keys / ref.removeprefix("private:")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(api_key)
+            stream.flush()
+            os.fsync(stream.fileno())
+        self._sync_directory(self._private_keys)
+        self._sync_directory(self.base)
+
+    def resolve_private_key(self, ref: str) -> str:
+        """Read an opaque credential reference issued by this onboarding store."""
+        if not isinstance(ref, str) or not PRIVATE_KEY_REF.fullmatch(ref):
+            raise OnboardingError("private_key_unavailable")
+        path = self._private_keys / ref.removeprefix("private:")
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, encoding="utf-8") as stream:
+                mode = os.fstat(stream.fileno()).st_mode
+                if stat.S_ISREG(mode) and stat.S_IMODE(mode) == 0o600 and (key := stream.read()):
+                    return key
+        except (OSError, UnicodeError):
+            pass
+        raise OnboardingError("private_key_unavailable")
+
+    def _prune_private_keys(self, state: dict[str, Any]) -> None:
+        # Run under a write transaction, using committed state. A process can
+        # die between writing a key and staging it, or after publishing a choice.
+        pending = state["private_pending"]
+        keep = {state["key_ref"]}
+        if pending and pending["status"] == "pending":
+            keep.add(pending["key_ref"])
+        try:
+            for path in self._private_keys.iterdir():
+                ref = f"private:{path.name}"
+                if PRIVATE_KEY_REF.fullmatch(ref) and ref not in keep:
+                    path.unlink(missing_ok=True)
+        except FileNotFoundError:
+            pass
+
+    def _cleanup_private_keys(self) -> None:
+        with self._tx() as db:
+            self._prune_private_keys(self._load(db))
+
+    def stage_private_provider(
+        self,
+        base_url: str,
+        api_key: str,
+        *,
+        expected_choice_id: str | None,
+        replace: bool,
+        generation: str,
+    ) -> dict[str, Any]:
+        """Persist a candidate for an already validated URL and return its pending record."""
+        if (
+            not isinstance(api_key, str)
+            or not 1 <= len(api_key) <= 4096
+            or any(not 33 <= ord(c) <= 126 for c in api_key)
+        ):
+            raise OnboardingError("invalid_api_key")
+        if not isinstance(generation, str) or not generation:
+            raise OnboardingError("private_provider_unavailable")
+        with self.control():
+            with self._tx() as db:
+                state = self._load(db)
+                if provider_choice_id(state) != expected_choice_id:
+                    raise OnboardingError("choice_changed")
+                if state["provider"] is not None and not replace:
+                    raise OnboardingError("provider_already_chosen")
+                existing = state["private_pending"]
+                if (
+                    existing
+                    and existing["status"] == "pending"
+                    and existing["generation"] == generation
+                ):
+                    raise OnboardingError("request_in_progress")
+                pending = {
+                    "id": uuid.uuid4().hex,
+                    "status": "pending",
+                    "error": None,
+                    "base_url": base_url,
+                    "key_ref": f"private:{uuid.uuid4().hex}",
+                    "generation": generation,
+                    "expected_choice_id": expected_choice_id,
+                }
+                self._write_private_key(pending["key_ref"], api_key)
+                state["private_pending"] = pending
+                self._save(db, state)
+            self._cleanup_private_keys()
+        return pending
+
+    def finish_private_provider(
+        self,
+        pending_id: str,
+        generation: str,
+        *,
+        models: list[str] | None = None,
+        error: str | None = None,
+        publish_guard: Callable[[], str | None] | None = None,
+    ) -> dict[str, Any]:
+        """Publish a matching successful scan or record a sanitized failure."""
+        with self.control():
+            if publish_guard is not None and (reason := publish_guard()):
+                raise OnboardingError(reason)
+            with self._tx() as db:
+                state = self._load(db)
+                pending = state["private_pending"]
+                if (
+                    pending is None
+                    or pending["status"] != "pending"
+                    or pending["id"] != pending_id
+                    or pending["generation"] != generation
+                    or pending["expected_choice_id"] != provider_choice_id(state)
+                ):
+                    raise OnboardingError("private_provider_pending_changed")
+                scanned = []
+                if error is None and models:
+                    try:
+                        key = self.resolve_private_key(pending["key_ref"])
+                    except OnboardingError:
+                        error = "private_key_unavailable"
+                    else:
+                        scanned = sorted(
+                            {
+                                model
+                                for model in models
+                                if isinstance(model, str)
+                                and MODEL_NAME.fullmatch(model)
+                                and key not in model
+                            }
+                        )[:MAX_MODELS]
+                rotation = (
+                    state["provider"] == PRIVATE_PROVIDER
+                    and state["generation"] == generation
+                    and state["base_url"] == pending["base_url"]
+                )
+                active = self._scoped_active(state) if rotation else None
+                if active and active["model"] not in scanned and error is None:
+                    error = "active_model_not_listed"
+                if error is not None or not scanned:
+                    # Provider error text may contain credentials or response data.
+                    code = error if error in PRIVATE_SCAN_ERRORS else "provider_validation_failed"
+                    pending.update(status="failed", error=code)
+                    self._save(db, state)
+                elif rotation:
+                    state.update(
+                        key_ref=pending["key_ref"],
+                        private_revision=pending_id,
+                        private_pending=None,
+                        scanned={"models": scanned, "at": self.clock()},
+                    )
+                    self._publish_choice(db, state)
+                    if state["report_due"]:
+                        self._queue_request(db, "initial_check")
+                else:
+                    state = _empty_state() | {
+                        "provider": PRIVATE_PROVIDER,
+                        "status": "scanned",
+                        "base_url": pending["base_url"],
+                        "key_ref": pending["key_ref"],
+                        "generation": generation,
+                        "scanned": {"models": scanned, "at": self.clock()},
+                        "choice_id": pending_id,
+                    }
+                    self._publish_choice(db, state)
+            self._cleanup_private_keys()
         return state
 
     @staticmethod
@@ -324,7 +537,7 @@ class Onboarding:
     ) -> dict[str, Any]:
         """List the models of the chosen provider only; any other lister is refused."""
         state = self.state()
-        option = PROVIDER_OPTIONS.get(state["provider"] or "")
+        option = ONBOARDING_OPTIONS.get(state["provider"] or "")
         if option is None:
             raise OnboardingError("no_provider_chosen")
         if getattr(lister, "name", None) != option.adapter:
@@ -403,7 +616,7 @@ class Onboarding:
     def _activate(self, model: str, reason: str) -> str:
         """Make `model` active through the selection store; returns the decision id."""
         state = self.state()
-        option = PROVIDER_OPTIONS[state["provider"]]
+        option = ONBOARDING_OPTIONS[state["provider"]]
         current = (self._scoped_active(state) or {}).get("model", "")
         decision = Decision("switch", current, model, (reason,))
         did = self.selection.record(
@@ -462,7 +675,7 @@ class Onboarding:
         return self.state()
 
     def _scoped_active(self, state: dict[str, Any]) -> dict | None:
-        option = PROVIDER_OPTIONS.get(state["provider"] or "")
+        option = ONBOARDING_OPTIONS.get(state["provider"] or "")
         if option is None or state["status"] != "ready":
             return None
         active = self.selection.active(provider=option.adapter, data_class=option.data_class)
@@ -548,7 +761,7 @@ class Onboarding:
             return None
         with self._tx() as db:
             state = self._load(db)
-            option = PROVIDER_OPTIONS.get(state["provider"] or "")
+            option = ONBOARDING_OPTIONS.get(state["provider"] or "")
             if option is None or state["status"] != "ready":
                 return None
             decided = self.selection.activated_decision(
@@ -688,7 +901,7 @@ class Onboarding:
             self._bind_legacy_choice(db, self._load(db))
 
     def _bind_legacy_choice(self, db: sqlite3.Connection, state: dict[str, Any]) -> None:
-        option = PROVIDER_OPTIONS.get(state["provider"] or "")
+        option = ONBOARDING_OPTIONS.get(state["provider"] or "")
         if state["choice_id"] is not None or option is None:
             return
         if state["status"] in ("provider_chosen", "scanned", "awaiting_download"):
@@ -809,7 +1022,7 @@ class Onboarding:
             state = self.state()
             active = self._scoped_active(state)
             report = self.latest_report()
-        option = PROVIDER_OPTIONS.get(state["provider"] or "")
+        option = ONBOARDING_OPTIONS.get(state["provider"] or "")
         scanned = state["scanned"]
         return {
             "status": state["status"],

@@ -51,6 +51,7 @@ def family_of(provider: str, model_id: str) -> str | None:
 # a unique matching ID from a scoped scan and require an operator pick.
 
 HINTS_STATUS = "UNVERIFIED"
+PRIVATE_PROVIDER = "openai-compatible"
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,7 @@ PROVIDER_OPTIONS: dict[str, ProviderOption] = {
                        "anthropic", "", "claude-sonnet-5-5", "model"),
         ProviderOption("openai-api", "OpenAI API (API key)", "api_key", "external",
                        "openai", "", "", ""),
+        ProviderOption(PRIVATE_PROVIDER, "OpenAI-compatible API", "api_key", "external", ""),
         ProviderOption("claude-subscription", "Claude subscription", "subscription",
                        "external", "", "claude-subscription", "claude-sonnet-5-5", "model"),
         ProviderOption("codex-subscription", "Codex subscription", "subscription",

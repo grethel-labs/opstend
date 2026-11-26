@@ -14,7 +14,9 @@ interface ProviderOption {
 
 interface AiView {
   status: string;
-  provider: { id: string; label: string; runtime_enabled: boolean } | null;
+  provider: { id: string; label: string; runtime_enabled: boolean; base_url?: string } | null;
+  choice_id: string | null;
+  pending_provider: { status: "pending" | "failed"; error: string | null } | null;
   options: ProviderOption[];
   active: { model: string } | null;
   local_download: { model: string; sha256: string; download_mb: number; ram_mb: number; disk_mb: number } | null;
@@ -37,21 +39,28 @@ interface AiView {
 const KEY_REFERENCE = /^(?:env:[A-Za-z_][A-Za-z0-9_]*|file:[^\x00\r\n]+)$/;
 
 function ProviderForm({
-  options, saving, onSave, onError,
+  options, provider, saving, onSave, onCancel, onError,
 }: {
   options: ProviderOption[];
+  provider: AiView["provider"];
   saving: boolean;
   onSave: (body: object) => void;
+  onCancel: () => void;
   onError: (message: string) => void;
 }) {
-  const [choice, setChoice] = useState("");
+  const [choice, setChoice] = useState(provider?.id ?? "");
   const selected = options.find(option => option.id === choice && option.available);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selected) return;
     const fields = new FormData(event.currentTarget);
-    if (selected.auth === "api_key") {
+    if (selected.id === "openai-compatible") {
+      const apiKey = event.currentTarget.elements.namedItem("api_key") as HTMLInputElement;
+      const body = { option: selected.id, base_url: fields.get("base_url"), api_key: apiKey.value };
+      apiKey.value = "";
+      onSave(body);
+    } else if (selected.auth === "api_key") {
       const keyRef = String(fields.get("key_ref") ?? "");
       if (keyRef.length > 300 || !KEY_REFERENCE.test(keyRef)) {
         onError("Enter an env: or file: key reference.");
@@ -91,7 +100,16 @@ function ProviderForm({
             {!option.available && <span className="muted"> — unavailable ({option.reason})</span>}
           </div>
         ))}
-        {selected?.auth === "api_key" && (
+        {selected?.id === "openai-compatible" && (
+          <div>
+            <p><label>Base URL <input name="base_url" type="url" defaultValue={provider?.base_url}
+              placeholder="https://provider.example/v1" required /></label></p>
+            <p><label>{provider?.id === selected.id ? "New API key" : "API key"}{" "}
+              <input name="api_key" type="password" autoComplete="new-password" required />
+            </label></p>
+          </div>
+        )}
+        {selected?.auth === "api_key" && selected.id !== "openai-compatible" && (
           <p key={selected.id}>
             <label>
               API key reference{" "}
@@ -113,6 +131,7 @@ function ProviderForm({
         )}
         <button type="submit" disabled={!selected}>Save provider</button>
       </fieldset>
+      <button type="button" onClick={onCancel} disabled={saving}>Cancel</button>
     </form>
   );
 }
@@ -130,8 +149,16 @@ export function AiPage({ onAuthLost }: PageProps) {
   const [message, setMessage] = useState("");
   const [url, setUrl] = useState("");
   const [savingProvider, setSavingProvider] = useState(false);
+  const [providerEdit, setProviderEdit] = useState<Pick<AiView, "choice_id" | "provider"> | null>();
+  const view = loaded.data;
+  const provider = view?.provider;
+  const edit = providerEdit === undefined && !provider ? { choice_id: null, provider: null } : providerEdit;
+  const staleEdit = edit && (
+    edit.choice_id !== (view?.choice_id ?? null) || edit.provider?.id !== provider?.id
+  );
+  const verifyingProvider = view?.pending_provider?.status === "pending";
 
-  async function run(action: () => Promise<unknown>) {
+  async function run(action: () => Promise<unknown>, fallbackError?: string) {
     try {
       const result = await action();
       setMessage("");
@@ -143,7 +170,9 @@ export function AiPage({ onAuthLost }: PageProps) {
         return;
       }
       const detail = err instanceof ApiError ? err.detail : undefined;
-      if (detail && typeof detail === "object" && "code" in detail && typeof detail.code === "string") {
+      if (fallbackError) {
+        setMessage(fallbackError);
+      } else if (detail && typeof detail === "object" && "code" in detail && typeof detail.code === "string") {
         const problems = "problems" in detail && Array.isArray(detail.problems) ? detail.problems : [];
         setMessage([detail.code, ...problems.filter(problem => typeof problem === "string")].join(" — "));
       } else {
@@ -153,13 +182,24 @@ export function AiPage({ onAuthLost }: PageProps) {
   }
 
   async function saveProvider(body: object) {
+    if (!edit || staleEdit || verifyingProvider) return;
+    const compatible = "option" in body && body.option === "openai-compatible";
+    if (compatible && edit.provider && !edit.choice_id) {
+      setMessage("Could not identify the current provider. Reload and try again.");
+      return;
+    }
+    const replacement = edit.provider ? { replace: true } : {};
+    const binding = compatible && edit.choice_id ? { expected_choice_id: edit.choice_id } : {};
     setSavingProvider(true);
-    const saved = await run(() => post("/api/ai/provider", body));
-    if (!saved) setSavingProvider(false);
+    const saved = await run(
+      () => post("/api/ai/provider", { ...body, ...replacement, ...binding }).then(() => true),
+      compatible ? "Could not save the provider. Review the current provider and try again." : undefined,
+    );
+    if (saved) setProviderEdit(null);
+    else loaded.reload();
+    setSavingProvider(false);
   }
 
-  const view = loaded.data;
-  const provider = view?.provider;
   const savedOption = view?.options.find(option => option.id === provider?.id);
   const local = provider?.id === "ollama-local" ? view?.local_download : null;
   const choosingInitial = view?.status === "provider_chosen" || view?.status === "scanned";
@@ -176,21 +216,35 @@ export function AiPage({ onAuthLost }: PageProps) {
             Status <Badge tone="info">{view.status}</Badge>{" "}
             {view.provider ? view.provider.label : "no provider chosen"}
           </p>
-          {provider ? (
-            !provider.runtime_enabled && (
-              <p role="status">
-                Provider runtime is disabled pending release acceptance.
-              </p>
-            )
-          ) : (
-            <ProviderForm options={view.options} saving={savingProvider} onSave={saveProvider} onError={setMessage} />
+          {provider?.base_url && <p>Base URL <code>{provider.base_url}</code></p>}
+          {provider && !provider.runtime_enabled && (
+            <p role="status">Provider runtime is disabled pending release acceptance.</p>
+          )}
+          {verifyingProvider && <p role="status">Verifying provider…</p>}
+          {view.pending_provider?.status === "failed" && (
+            <p className="error" role="alert">
+              Provider verification failed{view.pending_provider.error ? ` (${view.pending_provider.error})` : ""}.
+            </p>
+          )}
+          <button disabled={savingProvider || verifyingProvider || (!!edit && !staleEdit)} onClick={() => {
+            setMessage("");
+            setProviderEdit({ choice_id: view.choice_id ?? null, provider: view.provider });
+          }}>Change provider</button>
+          {staleEdit && <p className="error" role="alert">The provider changed. Reopen Change provider to continue.</p>}
+          {edit && !staleEdit && (
+            <ProviderForm
+              options={view.options} provider={edit.provider} saving={savingProvider || verifyingProvider}
+              onSave={saveProvider} onError={setMessage}
+              onCancel={() => { setProviderEdit(null); setMessage(""); }}
+            />
           )}
           <p>
             {provider?.runtime_enabled ? "Active model" : "Selected model"}: <code>{view.active?.model ?? "–"}</code>{" "}
             {view.pinned ? <Badge tone="warn">pinned</Badge> : null}
           </p>
           <p>
-            {savedOption?.available && savedOption.auth === "api_key" && savedOption.data_class === "external" && (
+            {savedOption?.available && savedOption.data_class === "external"
+              && (savedOption.auth === "api_key" || provider?.id === "openai-compatible") && (
               <button disabled={scanQueued} onClick={() => run(() => post("/api/ai/scan"))}>Queue model scan</button>
             )}{" "}
             <button onClick={() => run(() => post("/api/ai/best-now"))} disabled={!!view.pinned}>

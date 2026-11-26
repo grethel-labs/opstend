@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from steward import inference_worker
-from steward.core.inference import InferenceError
+from steward.core.inference import InferenceError, RawCompletion, Usage
 from steward.core.inference_budget import Ledger
 from steward.core.model_selection import SelectionStore
 from steward.core.model_sources import SourceStore
@@ -26,6 +26,26 @@ class TrackedProvider(FakeProvider):
     def list_models(self, timeout_s=10.0):
         self.world["lists"].append(self.model)
         return super().list_models(timeout_s)
+
+
+@pytest.mark.parametrize("fenced", [False, True])
+def test_private_provider_rejects_reflected_credential_after_json_decode(monkeypatch, fenced):
+    text = r'{"answer":{"detail":"credential-\u0078"}}'
+    if fenced:
+        text = f"```json\n{text}\n```"
+    usage = Usage(5, 5)
+    monkeypatch.setattr(
+        inference_worker.OpenAICompatibleProvider,
+        "complete",
+        lambda *_args, **_kwargs: RawCompletion(text, usage, "model"),
+    )
+    provider = inference_worker._PrivateProvider(
+        "https://10.0.0.4:9444/v1", "model", api_key="credential-x"
+    )
+    with pytest.raises(InferenceError) as failure:
+        provider.complete("system", "user", schema={}, max_output_tokens=10, timeout_s=1)
+    assert failure.value.error_class == "invalid_output"
+    assert failure.value.usage == usage
 
 
 class WorkerHarness:

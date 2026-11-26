@@ -1,4 +1,4 @@
-"""Private deployment authority for the managed local inference candidate."""
+"""Private deployment authority for the managed inference candidate."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import argparse
 import grp
 import hashlib
 import os
+import re
+import ssl
 import stat
 import subprocess
 import sys
@@ -13,14 +15,28 @@ import tempfile
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, StringConstraints, model_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
-from .config import Ai, Config
+from .config import Ai, AiBudget, AiDataClass, Config
+from .inference_endpoint import canonical_private_https_url, parse
 from .inference_local import LISTEN
 
 PROJECTION_PATH = Path("/etc/steward/inference/selection.json")
+PROJECTION_CONDITION = f"ConditionPathExists={PROJECTION_PATH}"
 SOCKET_PATH = Path("/run/steward-inference-admin/admin.sock")
 ADVICE_SOCKET_DIR = Path("/run/steward-inference-advice")
+EGRESS_SOCKET_PATH = Path("/run/steward-inference-egress/provider.sock")
+SYSTEMD_DIR = Path("/etc/systemd/system")
+EGRESS_UNITS = ("steward-inference-egress.socket", "steward-inference-egress.service")
+PRIVATE_TICK_TIMER = "steward-inference-tick.timer"
 DESIRED_PATH = Path("/etc/steward/config/desired.json")
 INPUT_LIMIT = 64 * 1024
 GROUP = "steward-inference"
@@ -65,11 +81,63 @@ def _validate_advice_budget(ai: Ai) -> None:
         raise ValueError("invalid managed local advice budget")
 
 
-def _validate_advice_routes(cfg: Config) -> None:
-    if cfg.admin.access != "private" or cfg.bot.public_hostname is not None:
+def _validate_advice_routes(cfg: Config, *, private_provider: bool = False) -> None:
+    access = {"private"}
+    if private_provider:
+        access |= {"private-loopback", "private-lan"}
+    if (
+        cfg.admin.access not in access
+        or (cfg.admin.access == "private-lan" and not cfg.hardening.firewall.manage)
+        or cfg.bot.public_hostname is not None
+    ):
         raise ValueError(
             "managed local advice requires private admin access and an unpublished bot"
         )
+
+
+class PrivateProviderPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    base_url: str
+    budget: AiBudget
+    evaluation_budget: AiBudget | None = None
+    evaluation_window: str | None = Field(None, max_length=256)
+    ca_pem: str | None = Field(None, max_length=32_768)
+    share: list[AiDataClass] = Field(default_factory=list, max_length=5, strict=False)
+
+    @field_validator("base_url")
+    @classmethod
+    def _canonical_url(cls, value: str) -> str:
+        return canonical_private_https_url(value)
+
+    @model_validator(mode="after")
+    def _validate_policy(self) -> PrivateProviderPolicy:
+        if self.evaluation_window is not None:
+            from .maintenance import parse_window_spec
+
+            parse_window_spec(self.evaluation_window)
+        for budget in (self.budget, self.evaluation_budget):
+            if budget is None:
+                continue
+            if budget.monthly.tokens is None or budget.monthly.seconds is None:
+                raise ValueError("private provider requires monthly token and time limits")
+            if budget.price is None and (
+                budget.monthly.cost_micro is not None or budget.per_project.cost_micro is not None
+            ):
+                raise ValueError("private provider cost limits require a declared price")
+        if len(set(self.share)) != len(self.share):
+            raise ValueError("duplicate private provider share class")
+        if self.ca_pem is not None:
+            certificate = (
+                r"-----BEGIN CERTIFICATE-----\s+[A-Za-z0-9+/=\s]+-----END CERTIFICATE-----"
+            )
+            if not re.fullmatch(rf"(?:\s*{certificate})+\s*", self.ca_pem, re.ASCII):
+                raise ValueError("private provider CA must contain only PEM certificates")
+            try:
+                ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(cadata=self.ca_pem)
+            except (ValueError, ssl.SSLError) as error:
+                raise ValueError("invalid private provider CA") from error
+        return self
 
 
 class _Candidate(BaseModel):
@@ -79,7 +147,8 @@ class _Candidate(BaseModel):
     revision: Digest
     release: Release
     wheel_sha256: Digest
-    manifest_sha256: Digest
+    manifest_sha256: Digest | None = None
+    private_provider: PrivateProviderPolicy | None = None
     advice: bool = False
 
     @model_validator(mode="before")
@@ -92,11 +161,21 @@ class _Candidate(BaseModel):
                 raise ValueError("candidate advice opt-in must be true or absent")
         return data
 
+    @model_validator(mode="after")
+    def _variant(self) -> _Candidate:
+        if (self.private_provider is None) == (self.manifest_sha256 is None):
+            raise ValueError("candidate requires either private HTTPS policy or Ollama manifest")
+        return self
+
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
         if not self.advice:
             data.pop("advice", None)
+        if self.private_provider is None:
+            data.pop("private_provider", None)
+        if self.manifest_sha256 is None:
+            data.pop("manifest_sha256", None)
         return data
 
 
@@ -106,12 +185,15 @@ class CandidatePolicy(_Candidate):
     weekly_window: str | None
 
     @model_validator(mode="after")
-    def _local(self) -> CandidatePolicy:
+    def _policy(self) -> CandidatePolicy:
         from .maintenance import parse_window_spec
 
-        _validate_local_ai(self.ai)
-        if self.advice:
-            _validate_advice_budget(self.ai)
+        if self.private_provider is None:
+            _validate_local_ai(self.ai)
+            if self.advice:
+                _validate_advice_budget(self.ai)
+        elif self.ai != Ai():
+            raise ValueError("private provider requires an empty canonical AI declaration")
         if self.weekly_window is not None:
             parse_window_spec(self.weekly_window)
         return self
@@ -128,9 +210,24 @@ class _Run(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     candidate: _Candidate
-    ollama: _Ollama
+    ollama: _Ollama | None = None
     run_id: RunId
-    models: str
+    models: str | None = None
+
+    @model_validator(mode="after")
+    def _variant(self) -> _Run:
+        local = self.candidate.private_provider is None
+        if local != (self.ollama is not None) or local != (self.models is not None):
+            raise ValueError("only the local candidate requires Ollama installation inputs")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if self.candidate.private_provider is not None:
+            data.pop("ollama", None)
+            data.pop("models", None)
+        return data
 
 
 def _read(path: Path, mode: int, gid: int = 0) -> bytes:
@@ -186,6 +283,11 @@ def read_candidate_policy(path: Path = PROJECTION_PATH) -> CandidatePolicy | Non
 def revoke_for_desired(desired: Path) -> None:
     """Withdraw authority before a canonical write. Caller holds the deployment lock."""
     path = desired.parent.parent / "inference" / PROJECTION_PATH.name
+    if desired == DESIRED_PATH and any(
+        os.path.lexists(SYSTEMD_DIR / unit) for unit in EGRESS_UNITS
+    ):
+        # Stop both the listener and active relay connections before removing authority.
+        _systemctl("stop", *EGRESS_UNITS)
     if not os.path.lexists(path.parent):
         return
     if path.parent.is_symlink():
@@ -201,6 +303,18 @@ def revoke_for_desired(desired: Path) -> None:
         boot.sync_directory(path.parent)
     except (boot.BootError, KeyError) as error:
         raise ValueError("unsafe inference policy projection") from error
+
+
+def _systemctl(action: str, *units: str) -> None:
+    subprocess.run(["/usr/bin/systemctl", action, *units], check=True, timeout=30)
+
+
+def _activate_private_egress(*, advice: bool) -> None:
+    _systemctl("start", *EGRESS_UNITS)
+    if advice:
+        _systemctl("start", "steward-inference-advice.service")
+    _systemctl("enable", EGRESS_UNITS[0], PRIVATE_TICK_TIMER)
+    _systemctl("start", PRIVATE_TICK_TIMER)
 
 
 def _socket_preflight(path: Path | None = None) -> None:
@@ -231,7 +345,7 @@ def _applied_policy(run: _Run) -> CandidatePolicy:
         verify_registry,
     )
     from .canonical import revision_id
-    from .config import Ai, effective
+    from .config import effective
     from .render import deployed
 
     candidate = run.candidate
@@ -249,7 +363,7 @@ def _applied_policy(run: _Run) -> CandidatePolicy:
     )
     verify_registry(cfg, registry, deployment_registry(cfg, candidate.release))
     if candidate.advice:
-        _validate_advice_routes(cfg)
+        _validate_advice_routes(cfg, private_provider=candidate.private_provider is not None)
     wheel = (
         boot.RELEASES
         / candidate.release
@@ -261,17 +375,20 @@ def _applied_policy(run: _Run) -> CandidatePolicy:
             hashlib.file_digest(handle, "sha256").hexdigest() == candidate.wheel_sha256,
             "installed release wheel differs from the candidate",
         )
-    reserved = (
-        cfg.reserved_memory_mb
-        + cfg.proxy.memory_mb
-        + (768 if cfg.scanning.enabled else 0)
-        + sum(project.resources.memory_mb for project in deployed(cfg))
-    )
-    boot.require(reserved == run.ollama.reserved_memory_mb, "candidate memory reservation changed")
+    if run.ollama is not None:
+        reserved = (
+            cfg.reserved_memory_mb
+            + cfg.proxy.memory_mb
+            + (768 if cfg.scanning.enabled else 0)
+            + sum(project.resources.memory_mb for project in deployed(cfg))
+        )
+        boot.require(
+            reserved == run.ollama.reserved_memory_mb, "candidate memory reservation changed"
+        )
     return CandidatePolicy(
         **candidate.model_dump(),
         generation=run.run_id,
-        ai=run.ollama.ai,
+        ai=run.ollama.ai if run.ollama is not None else Ai(),
         weekly_window=cfg.maintenance.weekly_window if cfg.maintenance else None,
     )
 
@@ -287,6 +404,7 @@ def _installed_model(run: _Run, policy: CandidatePolicy) -> list[list[int]]:
         parse_staged_model,
     )
 
+    boot.require(run.models is not None, "missing Ollama store")
     root = Path(run.models)
     boot.require(
         root.parent == MODEL_ROOT and boot.is_digest(root.name) and str(root) == run.models,
@@ -317,6 +435,35 @@ def _identity(*paths: Path) -> list[list[int]]:
         info = path.lstat()
         identity.append([info.st_dev, info.st_ino, info.st_ctime_ns])
     return identity
+
+
+def _private_installation(settings: PrivateProviderPolicy) -> list[list[int]]:
+    from .. import application_boot as boot
+
+    endpoint = parse(settings.base_url)
+    socket, service = (SYSTEMD_DIR / unit for unit in EGRESS_UNITS)
+    listener = _read(socket, 0o644).decode().splitlines()
+    relay = _read(service, 0o644).decode().splitlines()
+    boot.require(
+        [line for line in listener if line.startswith("Listen")]
+        == [f"ListenStream={EGRESS_SOCKET_PATH}"]
+        and "SocketUser=root" in listener
+        and "SocketMode=0660" in listener
+        and "SocketGroup=steward-inference" in listener
+        and PROJECTION_CONDITION in listener,
+        "invalid private inference listener",
+    )
+    boot.require(
+        [line for line in relay if line.startswith(("ExecStart", "IPAddress"))]
+        == [
+            f"ExecStart=/usr/lib/systemd/systemd-socket-proxyd {endpoint.netloc}",
+            "IPAddressDeny=any",
+            f"IPAddressAllow={endpoint.hostname}/32",
+        ]
+        and PROJECTION_CONDITION in relay,
+        "private inference relay differs from the approved endpoint",
+    )
+    return _identity(socket, service)
 
 
 def _remove_proof(path: Path) -> None:
@@ -373,7 +520,11 @@ def _stage_or_publish(action: str, run: _Run, marker: Path, proof: Path) -> None
     def checked_proof() -> tuple[CandidatePolicy, dict]:
         require_marker()
         policy = _applied_policy(run)
-        install_identity = _installed_model(run, policy)
+        install_identity = (
+            _installed_model(run, policy)
+            if policy.private_provider is None
+            else _private_installation(policy.private_provider)
+        )
         return policy, {
             "run": run.model_dump(mode="json"),
             "install": install_identity,
@@ -400,6 +551,12 @@ def _stage_or_publish(action: str, run: _Run, marker: Path, proof: Path) -> None
     require_marker()
     _remove_proof(marker)
     _project(policy)
+    if policy.private_provider is not None:
+        try:
+            _activate_private_egress(advice=policy.advice)
+        except (OSError, subprocess.SubprocessError):
+            revoke_for_desired(DESIRED_PATH)
+            raise
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -410,7 +567,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "action",
-        choices=("revoke", "socket-preflight", "advice-socket-preflight", "stage", "publish"),
+        choices=(
+            "revoke",
+            "socket-preflight",
+            "advice-socket-preflight",
+            "private-egress-preflight",
+            "stage",
+            "publish",
+        ),
     )
     parser.add_argument("role", nargs="?", choices=("bot", "api"))
     args = parser.parse_args(argv)
@@ -435,6 +599,13 @@ def main(argv: list[str] | None = None) -> int:
             boot.require(
                 run.model_dump(mode="json") == data, "incomplete inference deployment input"
             )
+        if action == "private-egress-preflight":
+            if run is None or run.candidate.private_provider is None:
+                raise ValueError("private inference policy is required")
+            _socket_preflight(EGRESS_SOCKET_PATH)
+            endpoint = parse(run.candidate.private_provider.base_url)
+            print(f"{endpoint.hostname} {endpoint.port}")
+            return 0
         with boot.deployment_lock(timeout=30):
             if run is None:
                 revoke_for_desired(DESIRED_PATH)

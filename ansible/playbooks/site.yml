@@ -29,12 +29,12 @@
           - steward_base_revision is defined
           - steward_base_revision is match('^[0-9a-f]{64}\\Z')
           - steward_base_revision == steward_config_revision
-          - steward_ollama_local is mapping
           - steward_inference_candidate is mapping
           - >-
             steward_inference_candidate.keys() | sort ==
             ((['advice'] if 'advice' in steward_inference_candidate else []) +
-             ['manifest_sha256', 'release', 'revision', 'version', 'wheel_sha256'])
+             (['private_provider'] if 'private_provider' in steward_inference_candidate else ['manifest_sha256']) +
+             ['release', 'revision', 'version', 'wheel_sha256'])
           - "'advice' not in steward_inference_candidate or steward_inference_candidate.advice is true"
           - steward_inference_candidate.version is integer
           - steward_inference_candidate.version == 1
@@ -42,7 +42,12 @@
           - steward_inference_candidate.release == steward_release.version
           - steward_inference_candidate.wheel_sha256 == steward_release.files[steward_release.wheel]
           - steward_inference_candidate.wheel_sha256 is match('^[0-9a-f]{64}\\Z')
-          - steward_inference_candidate.manifest_sha256 is match('^[0-9a-f]{64}\\Z')
+          - >-
+            (steward_inference_candidate.private_provider is mapping and steward_ollama_local is undefined)
+            if 'private_provider' in steward_inference_candidate else steward_ollama_local is mapping
+          - >-
+            'private_provider' in steward_inference_candidate or
+            steward_inference_candidate.manifest_sha256 is match('^[0-9a-f]{64}\\Z')
       when: steward_inference_candidate is defined
 
     - name: Require an unchanged installed schema 1 repository fetch candidate

@@ -18,12 +18,18 @@ from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi import Path as RoutePath
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from ..core.ai_admin import (
     MAX_SOURCE_ID_LENGTH,
+    PRIVATE_PENDING_STATUSES,
+    PRIVATE_PROVIDER_ERRORS,
     AdminControl,
     AutoBody,
+    ChoiceId,
     DecisionBody,
     DomainsBody,
     InvalidAdminRequest,
@@ -35,11 +41,13 @@ from ..core.ai_admin import (
     SourceId,
     valid_key,
 )
-from ..core.ai_admin_ipc import CANDIDATE_SCOPE_CODE
+from ..core.ai_admin_ipc import CANDIDATE_SCOPE_CODE, AdminPeer
 from ..core.ai_auth import AUTH_METHODS
 from ..core.ai_onboarding import SECRET_REF, HostFacts, Onboarding
 from ..core.config import AiFx
 from ..core.fx_rate import FxStore
+from ..core.inference_endpoint import canonical_private_https_url
+from ..core.inference_models import PRIVATE_PROVIDER
 from ..core.model_selection import SelectionStore
 from ..core.model_sources import DOMAIN, SourceStore
 from ..executor.protocol import ExecutorError
@@ -75,16 +83,27 @@ class _Provider(_Result):
     data_class: str
     runtime_enabled: bool
 
-    @field_validator("runtime_enabled")
-    @classmethod
-    def setup_only(cls, value: bool) -> bool:
-        if value:
-            raise ValueError("unexpected runtime activation")
-        return value
-
 
 class _SelectedProvider(_Provider):
-    key_ref: str | None
+    key_ref: str | None = None
+    base_url: str | None = None
+
+    @model_validator(mode="after")
+    def safe_provider_fields(self) -> _SelectedProvider:
+        if self.id == PRIVATE_PROVIDER:
+            if "key_ref" in self.model_fields_set or self.data_class != "external":
+                raise ValueError("invalid private provider response")
+            if self.base_url is not None:
+                canonical_private_https_url(self.base_url)
+            elif self.runtime_enabled:
+                raise ValueError("missing active private provider endpoint")
+        elif (
+            self.runtime_enabled
+            or "base_url" in self.model_fields_set
+            or "key_ref" not in self.model_fields_set
+        ):
+            raise ValueError("invalid provider response")
+        return self
 
     @field_validator("key_ref")
     @classmethod
@@ -95,6 +114,7 @@ class _SelectedProvider(_Provider):
 
 
 class _Option(_Provider):
+    runtime_enabled: Literal[False]
     auth: str
     available: bool
     reason: str
@@ -179,6 +199,19 @@ class _ExchangeRate(_Result):
     source: str | None
 
 
+class _PendingProvider(_Result):
+    status: str
+    error: str | None
+
+    @model_validator(mode="after")
+    def safe_status(self) -> _PendingProvider:
+        if self.status not in PRIVATE_PENDING_STATUSES or (
+            self.error is not None and self.error not in PRIVATE_PROVIDER_ERRORS
+        ):
+            raise ValueError("invalid pending provider response")
+        return self
+
+
 class _View(_Brief):
     provider: _SelectedProvider | None
     options: list[_Option]
@@ -191,6 +224,8 @@ class _View(_Brief):
     sources: _Sources
     exchange_rate: _ExchangeRate | None
     defaults_status: Literal["UNVERIFIED"]
+    choice_id: ChoiceId | None = None
+    pending_provider: _PendingProvider | None = None
 
 
 SourcePath = Annotated[str, RoutePath(max_length=MAX_SOURCE_ID_LENGTH)]
@@ -232,7 +267,8 @@ _REFUSALS = {
         "key_not_used_by_provider", "local_download_only_for_ollama_local",
         "provider_already_chosen", "local_download_declaration_required",
         "local_download_declaration_invalid", "resource_refused",
-    },
+        "invalid_provider_request",
+    } | PRIVATE_PROVIDER_ERRORS,
     "initial-model": {
         "scan_required", "initial_model_already_chosen", "model_not_the_declared_download",
         "model_not_in_scan",
@@ -344,6 +380,14 @@ def install(
     else:
         backend = peer
 
+    @app.exception_handler(RequestValidationError)
+    async def validate_request(request: Request, exc: RequestValidationError):
+        if request.method == "POST" and request.scope.get("endpoint") is ai_provider:
+            return JSONResponse(
+                status_code=422, content={"detail": {"code": "invalid_provider_request"}}
+            )
+        return await request_validation_exception_handler(request, exc)
+
     def dispatch(name: str, params: dict) -> tuple[dict, bool]:
         try:
             response = backend(name, params)
@@ -368,7 +412,20 @@ def install(
 
     @app.post("/api/ai/provider")
     def ai_provider(body: ProviderBody, request: Request):
-        return act("provider", request, body.model_dump())
+        params = body.model_dump(exclude={"api_key", "base_url", "expected_choice_id"})
+        if body.option == PRIVATE_PROVIDER and isinstance(peer, AdminPeer):
+            if body.key_ref is not None or body.local is not None:
+                require_session(request)
+                raise HTTPException(422, detail={"code": "invalid_provider_request"})
+            params.update(base_url=body.base_url, expected_choice_id=body.expected_choice_id)
+            if body.api_key is not None:
+                params["api_key"] = body.api_key.get_secret_value()
+        elif body.api_key is not None or body.base_url is not None:
+            require_session(request)
+            raise HTTPException(422, detail={"code": "invalid_provider_request"})
+        elif body.expected_choice_id is not None:
+            params["expected_choice_id"] = body.expected_choice_id
+        return act("provider", request, params)
 
     @app.post("/api/ai/scan", status_code=202)
     def ai_scan(request: Request):

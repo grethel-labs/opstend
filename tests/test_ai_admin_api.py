@@ -15,9 +15,16 @@ from fastapi.testclient import TestClient
 from steward import inference_worker
 from steward.adapters import inference
 from steward.api.app import MAX_BODY_BYTES, Settings, StartupError, create_app
+from steward.core.ai_admin import AdminControl
 from steward.core.ai_admin_ipc import CANDIDATE_SCOPE_CODE, MANAGED_SOCKET, AdminPeer
+from steward.core.ai_onboarding import Onboarding
 from steward.core.config import Ai
+from steward.core.fx_rate import FxStore
 from steward.core.ipc import MAX_MESSAGE_BYTES
+from steward.core.model_selection import SelectionStore
+from steward.core.model_sources import SourceStore
+from steward.executor import protocol
+from steward.executor.protocol import ExecutorError
 from test_ai_admin_ipc import (
     admin_peer,  # noqa: F401 (fixture)
     backend_state,  # noqa: F401 (fixture)
@@ -598,4 +605,137 @@ def test_remote_failures_hide_peer_details(tmp_path, managed_listener, action, f
     assert sent["params"] == params[action]
     assert response.status_code == 503
     assert response.json() == UNAVAILABLE
+    assert not (tmp_path / "api" / "ai").exists()
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"api_key": {"token": "fixture-secret"}},
+        {"api_key": ["fixture-secret"]},
+        {"api_key": "fixture-secret\r\n"},
+        {"api_key": "fixture-secret", "extra": "fixture-secret"},
+    ],
+)
+def test_provider_validation_redacts_the_entire_request(client, fields):
+    response = client.post(
+        "/api/ai/provider",
+        json={"option": "openai-compatible", **fields},
+        headers=key(1),
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"code": "invalid_provider_request"}}
+
+
+def test_legacy_ai_admin_disables_private_provider(client):
+    view = client.get("/api/ai").json()
+    option = next(row for row in view["options"] if row["id"] == "openai-compatible")
+    assert not option["available"]
+    assert option["data_class"] == "external"
+    assert view["choice_id"] is None and view["pending_provider"] is None
+    response = client.post(
+        "/api/ai/provider",
+        json={
+            "option": option["id"],
+            "base_url": "https://192.168.0.10:8443/v1",
+            "api_key": "fixture-secret",
+        },
+        headers=key(1),
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"code": "invalid_provider_request"}}
+    assert client.get("/api/ai").json()["provider"] is None
+
+
+def test_private_provider_handoff_to_pinned_admin_ipc(tmp_path, monkeypatch, offline):
+    path = str(tmp_path / "admin.sock")
+    app = create_app(settings(tmp_path, ai_peer=AdminPeer(path, os.geteuid())))
+    base = tmp_path / "inference"
+    base.mkdir()
+    onboarding = Onboarding(
+        base,
+        SelectionStore(base / "selection.db"),
+        SourceStore(base / "sources.db", clock=lambda: 0),
+    )
+    control = AdminControl(
+        onboarding, fx_store=FxStore(base / "fx.db"), read_fx=lambda: None,
+        private_generation="b" * 32,
+    )  # fmt: skip
+    base_url = "https://192.168.0.10:8443/v1"
+    secret = "fixture-secret"
+    choice_id = "a" * 32
+    payload = {
+        "option": "openai-compatible",
+        "base_url": base_url,
+        "api_key": secret,
+        "replace": True,
+        "expected_choice_id": choice_id,
+    }
+
+    with onboarding._tx() as db:
+        state = onboarding._load(db)
+        state.update(
+            provider="openai-compatible", choice_id=choice_id, base_url=base_url,
+            key_ref="env:LEGACY", status="provider_chosen", generation=control.private_generation,
+            private_pending={
+                "status": "failed", "error": "untrusted provider diagnostic",
+                "key_ref": "private:" + "c" * 32, "generation": control.private_generation,
+            },
+        )  # fmt: skip
+        onboarding._save(db, state)
+    requests = []
+
+    def intercept(action, params, *, socket_path, expected_peer_uid, **kwargs):
+        assert socket_path == path
+        assert expected_peer_uid == os.geteuid()
+        assert kwargs["strict_response"] is True
+        if action == "provider":
+            if params["key"] == key(2)["Idempotency-Key"]:
+                raise ExecutorError("unavailable", secret)
+            requests.append(params)
+            return {
+                "status": "ok",
+                "body": control._brief(),
+                "replayed": False,
+            }
+        return control.dispatch(action, params)
+
+    monkeypatch.setattr(protocol, "call", intercept)
+    with login(app) as browser:
+        response = browser.get("/api/ai")
+        assert response.status_code == 200
+        view = response.json()
+        assert view["choice_id"] == choice_id
+        assert view["pending_provider"] == {
+            "status": "failed",
+            "error": "provider_validation_failed",
+        }
+        assert view["provider"] == {
+            "id": "openai-compatible",
+            "label": "OpenAI-compatible API",
+            "base_url": base_url,
+            "data_class": "external",
+            "runtime_enabled": False,
+        }
+        option = next(row for row in view["options"] if row["id"] == payload["option"])
+        assert option["available"] and option["reason"] == ""
+        assert secret not in response.text
+
+        without_csrf = browser.headers.pop("X-CSRF-Token")
+        assert browser.post("/api/ai/provider", json=payload, headers=key(1)).status_code == 403
+        assert not requests
+        browser.headers["X-CSRF-Token"] = without_csrf
+        response = browser.post("/api/ai/provider", json=payload, headers=key(1))
+        assert response.status_code == 200
+        assert secret not in response.text
+        assert requests == [
+            {
+                "key": key(1)["Idempotency-Key"],
+                "body": payload | {"key_ref": None, "local": None},
+            }
+        ]
+        unavailable = browser.post("/api/ai/provider", json=payload, headers=key(2))
+        assert unavailable.status_code == 503
+        assert unavailable.json() == UNAVAILABLE
+    assert secret not in json.dumps(app.state.audit.read())
     assert not (tmp_path / "api" / "ai").exists()

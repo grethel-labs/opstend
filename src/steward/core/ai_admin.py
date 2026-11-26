@@ -8,14 +8,29 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
-from .ai_onboarding import HostFacts, LocalDownload, Onboarding, OnboardingError
+from .ai_onboarding import HostFacts, LocalDownload, Onboarding, OnboardingError, provider_choice_id
 from .config import AiFx
 from .fx_rate import FxStore, rate_state
+from .inference_endpoint import canonical_private_https_url
+from .inference_models import PRIVATE_PROVIDER
 from .model_sources import SourceError
 
 Name = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+ChoiceId = Annotated[str, Field(pattern=r"^[a-f0-9]{32}$")]
+PRIVATE_PENDING_STATUSES = frozenset({"pending", "failed"})
+PRIVATE_PROVIDER_ERRORS = frozenset(
+    {
+        "choice_changed",
+        "endpoint_mismatch",
+        "invalid_base_url",
+        "invalid_api_key",
+        "api_key_required",
+        "provider_validation_failed",
+        "private_provider_unavailable",
+    }
+)
 
 
 class _Body(BaseModel):
@@ -36,6 +51,16 @@ class ProviderBody(_Body):
     key_ref: str | None = Field(None, max_length=300)
     local: LocalBody | None = None
     replace: bool = False
+    base_url: str | None = Field(None, max_length=300)
+    api_key: SecretStr | None = Field(None, min_length=1, max_length=4096)
+    expected_choice_id: ChoiceId | None = None
+
+    @field_validator("api_key")
+    @classmethod
+    def valid_api_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and any(not 33 <= ord(c) <= 126 for c in value.get_secret_value()):
+            raise ValueError("invalid API key")
+        return value
 
 
 class ModelBody(_Body):
@@ -111,12 +136,14 @@ class AdminControl:
         read_fx: Callable[[], AiFx | None],
         clock: Callable[[], float] = time.time,
         host_facts: Callable[[], HostFacts] | None = None,
+        private_generation: str | None = None,
     ):
         self.onboarding = onboarding
         self.fx_store = fx_store
         self.read_fx = read_fx
         self.clock = clock
         self.host_facts = host_facts or (lambda: read_host_facts(onboarding.base))
+        self.private_generation = private_generation
 
     def dispatch(self, action: str, params: object) -> dict:
         if action not in self._ACTIONS:
@@ -153,7 +180,47 @@ class AdminControl:
         return {"status": "ok", "body": result, "replayed": replayed}
 
     def _view(self, _: _Body) -> dict:
-        return self.onboarding.view(self._fx_state)
+        state = self.onboarding.state()
+        view = self.onboarding.view(self._fx_state)
+        current = self.onboarding.state()
+        if (
+            provider_choice_id(state) != provider_choice_id(current)
+            or state["provider"] != current["provider"]
+        ):
+            raise InvalidAdminRequest
+        view["choice_id"] = provider_choice_id(state)
+        view["pending_provider"] = None
+        if self.private_generation:
+            for option in view["options"]:
+                if option["id"] == PRIVATE_PROVIDER:
+                    option.update(available=True, reason="")
+            pending = current.get("private_pending")
+            if isinstance(pending, dict) and pending.get("generation") == self.private_generation:
+                status = pending.get("status")
+                error = pending.get("error")
+                if isinstance(status, str) and status in PRIVATE_PENDING_STATUSES:
+                    if error is not None and (
+                        not isinstance(error, str) or error not in PRIVATE_PROVIDER_ERRORS
+                    ):
+                        error = "provider_validation_failed"
+                    view["pending_provider"] = {"status": status, "error": error}
+
+        provider = view["provider"]
+        if provider is not None and provider["id"] == PRIVATE_PROVIDER:
+            provider.pop("key_ref", None)
+            base_url = current.get("base_url")
+            if (
+                self.private_generation
+                and current.get("generation") == self.private_generation
+                and base_url is not None
+            ):
+                if not isinstance(base_url, str):
+                    raise InvalidAdminRequest
+                try:
+                    provider["base_url"] = canonical_private_https_url(base_url)
+                except ValueError:
+                    raise InvalidAdminRequest from None
+        return view
 
     def _fx_state(self) -> dict | None:
         fx = self.read_fx()
@@ -179,6 +246,14 @@ class AdminControl:
         }
 
     def _provider(self, body: ProviderBody) -> dict:
+        if body.option == PRIVATE_PROVIDER:
+            raise OnboardingError("method_unavailable", ["no adapter"])
+        if body.base_url is not None or body.api_key is not None:
+            raise OnboardingError("invalid_provider_request")
+        if body.expected_choice_id is not None and (
+            body.expected_choice_id != provider_choice_id(self.onboarding.state())
+        ):
+            raise OnboardingError("choice_changed")
         local = LocalDownload(**body.local.model_dump()) if body.local else None
         self.onboarding.choose_provider(
             body.option, key_ref=body.key_ref, local=local,

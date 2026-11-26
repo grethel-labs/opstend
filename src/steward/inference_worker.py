@@ -24,7 +24,14 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .adapters.inference import OLLAMA_URL, OllamaProvider, build_provider
+from .adapters.inference import (
+    OLLAMA_URL,
+    ManagedPrivateHttpsTransport,
+    OllamaProvider,
+    OpenAICompatibleProvider,
+    build_provider,
+)
+from .core import inference_deployment
 from .core.advice import ADVICE_TASK
 from .core.advice_ipc import (
     MANAGED_DIRECTORY,
@@ -36,7 +43,13 @@ from .core.advice_ipc import (
 )
 from .core.ai_admin import AdminControl, InvalidAdminRequest, ProviderBody, valid_key
 from .core.ai_admin_ipc import CANDIDATE_SCOPE_CODE, MANAGED_SOCKET, _AdminServer, _validate_uid
-from .core.ai_onboarding import MODEL_NAME, Onboarding, OnboardingError, evaluate_model
+from .core.ai_onboarding import (
+    MODEL_NAME,
+    Onboarding,
+    OnboardingError,
+    evaluate_model,
+    provider_choice_id,
+)
 from .core.audit import AuditLog
 from .core.canonical import revision_id
 from .core.config import UNAVAILABLE_FEATURES, Ai, AiBudget, AiFx, AiScopeLimits
@@ -48,9 +61,16 @@ from .core.inference import (
     InferenceService,
     Outcome,
     Policy,
+    decode_output,
 )
 from .core.inference_budget import Ledger, Price
-from .core.inference_models import PROVIDER_OPTIONS
+from .core.inference_deployment import (
+    EGRESS_SOCKET_PATH,
+    CandidatePolicy,
+    PrivateProviderPolicy,
+)
+from .core.inference_endpoint import canonical_private_https_url
+from .core.inference_models import PRIVATE_PROVIDER, PROVIDER_OPTIONS
 from .core.inference_snapshot import Item, Scope
 from .core.maintenance import admit, parse_window_spec
 from .core.maintenance_runs import MaintenanceRuns
@@ -72,6 +92,8 @@ PROJECTION_PATH = Path("/etc/steward/inference/selection.json")
 KILL_SWITCH_PATH = Path("/etc/steward/killswitch")
 STATE_DIR = Path("/var/lib/steward-inference")
 MAX_PROJECTION_BYTES = 128 * 1024
+PRIVATE_EVALUATION_WORK = "private_model_evaluation"
+PRIVATE_EVALUATION_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -81,6 +103,7 @@ class AppliedPolicy:
     weekly_window: str | None
     generation: str | None = None
     manifest_sha256: str | None = None
+    private_provider: PrivateProviderPolicy | None = None
 
 
 ProviderBuilder = Callable[[Ai], InferenceProvider]
@@ -190,6 +213,15 @@ def _read_policy(reader: PolicyReader) -> AppliedPolicy | None:
                 parse_window_spec(policy.weekly_window)
             # Detach the binding from mutable objects owned by the caller.
             ai = Ai.model_validate(policy.ai.model_dump())
+            if policy.private_provider is not None:
+                if (
+                    not re.fullmatch(r"[a-f0-9]{32}", policy.generation or "")
+                    or policy.manifest_sha256 is not None
+                    or ai != Ai()
+                    or not isinstance(policy.private_provider, PrivateProviderPolicy)
+                ):
+                    return None
+                return policy
             if policy.generation is None:
                 if policy.manifest_sha256 is not None:
                     return None
@@ -721,6 +753,303 @@ class _Tick:
         }
 
 
+class _PrivateProvider(OpenAICompatibleProvider):
+    """Require the selected model and suppress credentials reflected by the peer."""
+
+    def list_models(self, timeout_s: float = 10.0) -> list[str]:
+        return [model for model in super().list_models(timeout_s) if self._key not in model]
+
+    def complete(self, system, user, *, schema, max_output_tokens, timeout_s):
+        result = super().complete(
+            system, user, schema=schema, max_output_tokens=max_output_tokens, timeout_s=timeout_s
+        )
+        try:
+            if result.model != self.model or self._key in result.text:
+                raise ValueError
+            values = [decode_output(result.text)]
+            while values:
+                value = values.pop()
+                if isinstance(value, str) and self._key in value:
+                    raise ValueError
+                if isinstance(value, dict):
+                    values.extend(value)
+                    values.extend(value.values())
+                elif isinstance(value, list):
+                    values.extend(value)
+        except (ValueError, RecursionError):
+            raise InferenceError("invalid_output", usage=result.usage, spend="known") from None
+        return result
+
+
+def _private_guarded_provider(
+    settings: PrivateProviderPolicy,
+    onboarding: Onboarding,
+    key_ref: str,
+    model: str,
+    guard: Callable[[], str | None],
+    remaining: Callable[[], float],
+) -> _GuardedProvider:
+    def require_admission() -> None:
+        if guard() is not None:
+            raise InferenceError("policy_denied", spend="none")
+
+    require_admission()
+    key = onboarding.resolve_private_key(key_ref)
+    transport = ManagedPrivateHttpsTransport(
+        settings.base_url,
+        EGRESS_SOCKET_PATH,
+        ca_pem=settings.ca_pem,
+        check_admission=require_admission,
+        send_guard=onboarding.control,
+    )
+    provider = _PrivateProvider(
+        settings.base_url, model, api_key=key, transport=transport, timeout_s=WORKER_TIMEOUT_S
+    )
+    return _GuardedProvider(provider, guard, remaining)
+
+
+class _PrivateTick(_Tick):
+    def _guard(self, policy: AppliedPolicy, state: dict, *, pending: bool = False) -> str | None:
+        if self.policy() != policy:
+            return "applied_policy_changed"
+        if not _allowed(self.kill_switch):
+            return "kill_switch"
+        current = self.onboarding.state()
+        if pending:
+            return None if current["private_pending"] == state else "choice_changed"
+        if _identity(current) != _identity(state) or not _private_matches(policy, current):
+            return "choice_changed"
+        return None
+
+    def _verify(self, policy: AppliedPolicy) -> None:
+        settings = policy.private_provider
+        assert settings is not None
+        pending = self.onboarding.state()["private_pending"]
+        if (
+            not pending
+            or pending["status"] != "pending"
+            or pending["generation"] != policy.generation
+        ):
+            return
+        if pending["base_url"] != settings.base_url:
+            return
+
+        def guard() -> str | None:
+            return self._guard(policy, pending, pending=True)
+
+        if guard() is not None:
+            return
+        models, error = None, None
+        try:
+            provider = _private_guarded_provider(
+                settings,
+                self.onboarding,
+                pending["key_ref"],
+                "inventory",
+                guard,
+                lambda: float("inf"),
+            )
+            models = provider.list_models()
+        except (InferenceError, OnboardingError, OSError, ValueError):
+            error = "provider_validation_failed"
+        if guard() is not None:
+            return
+        try:
+            self.onboarding.finish_private_provider(
+                pending["id"],
+                policy.generation,
+                models=models,
+                error=error,
+                publish_guard=guard,
+            )
+        except OnboardingError:
+            return
+
+    def scan(self, row: dict) -> str:
+        state, policy, _ = self._snapshot(row)
+        if policy is None or not _private_matches(policy, state):
+            raise OnboardingError("applied_provider_mismatch")
+        settings = policy.private_provider
+        assert settings is not None
+
+        def guard() -> str | None:
+            return self._guard(policy, state)
+
+        provider = _private_guarded_provider(
+            settings, self.onboarding, state["key_ref"], "inventory", guard, lambda: float("inf")
+        )
+        self.onboarding.scan(provider, publish_guard=guard)
+        return "ok"
+
+    def initial_check(self, row: dict) -> str:
+        state, policy, _ = self._snapshot(row)
+        if policy is None or not _private_matches(policy, state):
+            raise OnboardingError("applied_provider_mismatch")
+        settings = policy.private_provider
+        assert settings is not None
+        due = state["report_due"]
+
+        def guard() -> str | None:
+            return self._guard(policy, state) or (
+                "report_due_changed" if self.onboarding.state()["report_due"] != due else None
+            )
+
+        def check(model: str) -> dict:
+            if reason := guard():
+                return _incomplete(model, reason)
+            budget = settings.evaluation_budget
+            if budget is None:
+                return _incomplete(model, "evaluation_budget_unavailable")
+            try:
+                provider = _private_guarded_provider(
+                    settings, self.onboarding, state["key_ref"], model, guard, lambda: float("inf")
+                )
+            except (InferenceError, OnboardingError, OSError, ValueError):
+                return _incomplete(model, "provider_validation_failed")
+            ledger = Ledger(self.onboarding.base / "private-evaluation.db", budget)
+            try:
+                return evaluate_model(
+                    provider,
+                    ledger,
+                    price=_budget_price(budget),
+                    share=frozenset(settings.share),
+                    clock=self.clock,
+                    monotonic=self.monotonic,
+                )
+            finally:
+                ledger.close()
+
+        report = self.onboarding.ensure_report(check, publish_guard=guard)
+        if report is None:
+            return "no_report_due"
+        return "complete" if report["body"]["complete"] else "incomplete"
+
+    def evaluate_incumbent(self, mode: str, row: dict | None = None) -> str:
+        state, policy, _ = self._snapshot(row)
+        if policy is None or not _private_matches(policy, state) or not _ready(state):
+            return "onboarding_incomplete"
+        if state["pinned"]:
+            return "model_pinned"
+        if mode == "weekly" and not state["auto"]:
+            return "auto_selection_disabled"
+        settings = policy.private_provider
+        assert settings is not None
+        budget = settings.evaluation_budget
+        if budget is None:
+            return "evaluation_budget_unavailable"
+        if SUITE_DATA_CLASS not in settings.share:
+            return "suite_data_class_not_shared"
+        window = settings.evaluation_window or policy.weekly_window
+        if window is None:
+            return "maintenance_window_unavailable"
+        active = self.selection.active(provider=PRIVATE_PROVIDER, data_class="external")
+        if not active or active["choice_id"] != state["choice_id"]:
+            return "onboarding_incomplete"
+
+        start = self.clock()
+        wall_end = start + PRIVATE_EVALUATION_SECONDS
+        mono_end = self.monotonic() + PRIVATE_EVALUATION_SECONDS
+
+        def remaining() -> float:
+            return min(wall_end - self.clock(), mono_end - self.monotonic())
+
+        def guard() -> str | None:
+            if reason := self._guard(policy, state):
+                return reason
+            current = self.onboarding.state()
+            if current["pinned"]:
+                return "model_pinned"
+            if mode == "weekly" and not current["auto"]:
+                return "auto_selection_disabled"
+            if self.selection.active(provider=PRIVATE_PROVIDER, data_class="external") != active:
+                return "active_selection_changed"
+            return "selection_deadline" if remaining() <= 0 or self.clock() < start else None
+
+        if reason := guard():
+            return reason
+        run = self.runs.request(
+            window,
+            start,
+            work=PRIVATE_EVALUATION_WORK,
+            work_seconds=PRIVATE_EVALUATION_SECONDS,
+            created_by="inference",
+        )
+        if not run.created or run.job is None:
+            return run.admission.reason
+        job = self.runs.begin("inference", self.clock(), job_id=run.job["id"])
+        if job is None:
+            return "window_expired_before_start"
+        evidence = {"mode": mode}
+        reason = "evaluation_unavailable"
+        try:
+            provider = _private_guarded_provider(
+                settings, self.onboarding, state["key_ref"], active["model"], guard, remaining
+            )
+            ledger = Ledger(self.onboarding.base / "private-evaluation.db", budget)
+            try:
+                evidence |= evaluate_model(
+                    provider,
+                    ledger,
+                    price=_budget_price(budget),
+                    share=frozenset(settings.share),
+                    clock=self.clock,
+                    monotonic=self.monotonic,
+                )
+            finally:
+                ledger.close()
+            reason = guard() or (
+                "comparison_sources_unavailable"
+                if evidence["complete"]
+                else evidence.get("error") or "evaluation_incomplete"
+            )
+        except (InferenceError, OnboardingError, OSError, ValueError):
+            reason = guard() or reason
+        finally:
+            self.runs.complete(
+                job["id"],
+                "inference",
+                ok=reason == "comparison_sources_unavailable",
+                now=self.clock(),
+                result=evidence | {"reason": reason},
+            )
+        self.audit({"event": "inference.private_evaluation", "mode": mode, "reason": reason})
+        return reason
+
+    def run(self) -> dict:
+        policy = self.policy()
+        if policy is None:
+            return {"status": "unavailable", "reason": "applied_policy_unavailable"}
+        with self.onboarding.control():
+            self.onboarding.recover_requests()
+        self.runs.recover(self.clock())
+        self._verify(policy)
+        requests = self.onboarding.process_requests(
+            {
+                "scan": self.scan,
+                "initial_check": self.initial_check,
+                "best_now": partial(self.evaluate_incumbent, "best_now"),
+            },
+            limit=4,
+            bind_choice=True,
+        )
+        weekly_reason = self.evaluate_incumbent("weekly")
+        return {
+            "status": "ok",
+            "requests": requests,
+            "weekly": {
+                "status": "kept"
+                if weekly_reason == "comparison_sources_unavailable"
+                else "skipped",
+                "reason": weekly_reason,
+            },
+        }
+
+
+def _budget_price(budget: AiBudget) -> Price | None:
+    price = budget.price
+    return Price(price.input_per_mtok_micro, price.output_per_mtok_micro) if price else None
+
+
 def run_once(
     *,
     read_policy: PolicyReader,
@@ -750,7 +1079,12 @@ def run_once(
                 return {"status": "busy"}
             store = Store(base / "maintenance.db")
             try:
-                tick = _Tick(
+                tick_type = (
+                    _PrivateTick
+                    if candidate_policy and candidate_policy.private_provider
+                    else _Tick
+                )
+                tick = tick_type(
                     base,
                     read_policy,
                     kill_switch,
@@ -808,13 +1142,26 @@ def read_projection(path: Path = PROJECTION_PATH) -> AppliedPolicy | None:
 
 
 def _read_candidate() -> AppliedPolicy | None:
-    from .core.inference_deployment import read_candidate_policy
-
-    policy = read_candidate_policy()
+    policy = inference_deployment.read_candidate_policy()
     if policy is None:
         return None
     return AppliedPolicy(
-        policy.revision, policy.ai, policy.weekly_window, policy.generation, policy.manifest_sha256
+        policy.revision,
+        policy.ai,
+        policy.weekly_window,
+        policy.generation,
+        policy.manifest_sha256,
+        policy.private_provider,
+    )
+
+
+def _private_matches(policy: AppliedPolicy, state: dict) -> bool:
+    return bool(
+        policy.private_provider is not None
+        and state["provider"] == PRIVATE_PROVIDER
+        and state["choice_id"]
+        and state["generation"] == policy.generation
+        and state["base_url"] == policy.private_provider.base_url
     )
 
 
@@ -835,15 +1182,24 @@ class _CandidateAdminControl(AdminControl):
 
     def dispatch(self, action: str, params: object) -> dict:
         policy = self._require_policy()
+        if policy.private_provider is not None:
+            return self._dispatch_private(policy, action, params)
         if action == "view":
             state = self.onboarding.state()
-            if state["provider"] is not None and not _candidate_matches(policy, state):
+            if state["provider"] not in (None, PRIVATE_PROVIDER) and not _candidate_matches(
+                policy, state
+            ):
                 return self._refuse(policy)
             result = super().dispatch(action, params)
             self._require_policy(policy)
             current = self.onboarding.state()
-            if current["provider"] is not None and not _candidate_matches(policy, current):
+            if current["provider"] not in (None, PRIVATE_PROVIDER) and not _candidate_matches(
+                policy, current
+            ):
                 return self._refuse(policy)
+            for option in result["body"]["options"]:
+                if option["id"] != "ollama-local" and option["available"]:
+                    option.update(available=False, reason="no adapter")
             return result
         if action not in ("provider", "scan"):
             return self._refuse(policy)
@@ -864,6 +1220,8 @@ class _CandidateAdminControl(AdminControl):
                     if (
                         body.option != "ollama-local"
                         or body.key_ref is not None
+                        or body.api_key is not None
+                        or body.base_url is not None
                         or body.local is None
                         or body.local.model_dump() != _candidate_declaration(policy)
                     ):
@@ -890,6 +1248,91 @@ class _CandidateAdminControl(AdminControl):
             raise InvalidAdminRequest from None
         except OnboardingError as exc:
             self._require_policy(policy)
+            return {"status": "rejected", "code": exc.code, "problems": exc.problems}
+        return {"status": "ok", "body": result, "replayed": replayed}
+
+    def _dispatch_private(self, policy: AppliedPolicy, action: str, params: object) -> dict:
+        approved = policy.private_provider
+        assert approved is not None
+        if action == "view":
+            result = super().dispatch(action, params)
+            view = result["body"]
+            state = self.onboarding.state()
+            if provider_choice_id(state) != view["choice_id"]:
+                raise InvalidAdminRequest
+            for option in view["options"]:
+                if option["id"] == PRIVATE_PROVIDER:
+                    option.update(available=True, reason="")
+                elif option["available"]:
+                    option.update(available=False, reason="no adapter")
+            if _private_matches(policy, state):
+                view["provider"].update(base_url=approved.base_url, runtime_enabled=_ready(state))
+            else:
+                view.update(active=None, scanned=None, suggested=None, pinned=None, report=None)
+            pending = state["private_pending"]
+            if pending is not None and pending["generation"] == policy.generation:
+                view["pending_provider"] = {
+                    "status": pending["status"],
+                    "error": "provider_validation_failed" if pending["error"] else None,
+                }
+            self._require_policy(policy)
+            return result
+
+        if action not in ("provider", "scan", "initial-model", "pin", "unpin", "auto", "best-now"):
+            return self._refuse(policy)
+        if (
+            not isinstance(params, dict)
+            or params.keys() != {"key", "body"}
+            or not valid_key(params["key"])
+            or not isinstance(params["body"], dict)
+        ):
+            raise InvalidAdminRequest
+        model, operation = self._ACTIONS[action]
+        try:
+            body = model.model_validate(params["body"], strict=True)
+        except ValidationError:
+            raise InvalidAdminRequest from None
+
+        try:
+            if action == "provider":
+                if not isinstance(body, ProviderBody) or body.option != PRIVATE_PROVIDER:
+                    return self._refuse(policy)
+                if body.key_ref is not None or body.local is not None:
+                    raise OnboardingError("invalid_provider_request")
+                if body.api_key is None:
+                    raise OnboardingError("api_key_required")
+                try:
+                    url = canonical_private_https_url(body.base_url or "")
+                except ValueError:
+                    raise OnboardingError("invalid_base_url") from None
+                if url != approved.base_url:
+                    raise OnboardingError("endpoint_mismatch")
+
+                def stage() -> dict:
+                    self._require_policy(policy)
+                    self.onboarding.stage_private_provider(
+                        url,
+                        body.api_key.get_secret_value(),
+                        expected_choice_id=body.expected_choice_id,
+                        replace=body.replace,
+                        generation=policy.generation,
+                    )
+                    return self._brief()
+
+                result, replayed = self.onboarding.once(
+                    f"private:{policy.generation}:provider:{params['key']}", stage
+                )
+            else:
+                with self.onboarding.control():
+                    self._require_policy(policy)
+                    state = self.onboarding.state()
+                    if not _private_matches(policy, state):
+                        return self._refuse(policy)
+                    choice = provider_choice_id(state)
+                    key = f"private:{policy.generation}:{choice}:{action}:{params['key']}"
+                    result, replayed = self.onboarding.once(key, lambda: operation(self, body))
+            self._require_policy(policy)
+        except OnboardingError as exc:
             return {"status": "rejected", "code": exc.code, "problems": exc.problems}
         return {"status": "ok", "body": result, "replayed": replayed}
 
@@ -965,26 +1408,28 @@ def read_kill_switch(path: Path = KILL_SWITCH_PATH) -> bool:
     return True
 
 
-def _managed_admin_uid() -> tuple[int, int]:
+def _managed_admin_uid(*, private: bool = False) -> tuple[int, int]:
     api = pwd.getpwnam("steward-api")
     inference = pwd.getpwnam("steward-inference")
-    ollama = pwd.getpwnam("steward-ai")
-    for uid in (api.pw_uid, inference.pw_uid, ollama.pw_uid):
+    uids = [api.pw_uid, inference.pw_uid]
+    if not private:
+        uids.append(pwd.getpwnam("steward-ai").pw_uid)
+    for uid in uids:
         _validate_uid(uid)
-    if len({0, api.pw_uid, inference.pw_uid, ollama.pw_uid}) != 4:
+    if len({0, *uids}) != len(uids) + 1:
         raise PermissionError("AI services must have distinct non-root UIDs")
     if os.getuid() != inference.pw_uid or os.geteuid() != inference.pw_uid:
         raise PermissionError("unexpected inference service UID")
     return api.pw_uid, api.pw_gid
 
 
-def _serve_managed_admin() -> None:
+def _serve_managed_admin(*, private: bool = False) -> None:
     if os.environ.pop("LISTEN_PID", None) != str(os.getpid()):
         raise ValueError("invalid systemd listener PID")
     if os.environ.pop("LISTEN_FDS", None) != "1":
         raise ValueError("expected one systemd listener")
     os.environ.pop("LISTEN_FDNAMES", None)
-    admin_uid, admin_gid = _managed_admin_uid()
+    admin_uid, admin_gid = _managed_admin_uid(private=private)
     path = Path(MANAGED_SOCKET)
     if not _trusted_directory(path.parent):
         raise PermissionError("untrusted manager socket directory")
@@ -1009,12 +1454,13 @@ def _serve_managed_admin() -> None:
             server.serve_forever()
 
 
-def _managed_advice_accounts() -> dict[str, pwd.struct_passwd]:
-    accounts = {name: pwd.getpwnam(f"steward-{name}") for name in ("bot", "api", "inference", "ai")}
+def _managed_advice_accounts(*, private: bool = False) -> dict[str, pwd.struct_passwd]:
+    roles = ("bot", "api", "inference") if private else ("bot", "api", "inference", "ai")
+    accounts = {name: pwd.getpwnam(f"steward-{name}") for name in roles}
     uids = {account.pw_uid for account in accounts.values()}
     for uid in uids:
         _validate_uid(uid)
-    if len(uids) != 4 or 0 in uids:
+    if len(uids) != len(accounts) or 0 in uids:
         raise PermissionError("advice services must have distinct non-root UIDs")
     worker_uid = accounts["inference"].pw_uid
     if os.getuid() != worker_uid or os.geteuid() != worker_uid:
@@ -1025,14 +1471,14 @@ def _managed_advice_accounts() -> dict[str, pwd.struct_passwd]:
 def _run_managed_advice(
     base: Path, items: list[Item], scope: Scope, sources: tuple[str, ...], deadline: float
 ) -> Outcome:
-    from .core.inference_deployment import read_candidate_policy
-
     denied = Outcome(False, error_class="policy_denied")
     if not _allowed(read_kill_switch):
         return denied
-    policy = read_candidate_policy()
+    policy = inference_deployment.read_candidate_policy()
     if policy is None or policy.advice is not True:
         return denied
+    if policy.private_provider is not None:
+        return _run_private_advice(base.parent, policy, items, scope, sources, deadline)
     ai = policy.ai
     budget = ai.budget
     # The verified candidate policy validates advice budget limits before publication and read.
@@ -1040,7 +1486,7 @@ def _run_managed_advice(
         return denied
 
     def guard() -> str | None:
-        current = read_candidate_policy()
+        current = inference_deployment.read_candidate_policy()
         if current != policy or not _allowed(read_kill_switch):
             return "policy_denied"
         return None
@@ -1070,6 +1516,84 @@ def _run_managed_advice(
         )
         if guard() is not None:
             return denied
+        outcome = inference.run(
+            ADVICE_TASK, items, scope, expected_sources=sources, deadline=deadline
+        )
+    finally:
+        ledger.close()
+    return outcome if guard() is None else denied
+
+
+def _run_private_advice(
+    base: Path,
+    policy: CandidatePolicy,
+    items: list[Item],
+    scope: Scope,
+    sources: tuple[str, ...],
+    deadline: float,
+) -> Outcome:
+    settings = policy.private_provider
+    assert settings is not None
+    denied = Outcome(False, error_class="policy_denied")
+    onboarding = _onboarding(base, time.time)
+    applied = _read_candidate()
+    if applied is None or applied.generation != policy.generation:
+        return denied
+    if SUITE_DATA_CLASS not in settings.share:
+        return denied
+    state = onboarding.state()
+    if not _private_matches(applied, state) or not _ready(state):
+        return denied
+
+    def selected() -> dict | None:
+        active = onboarding.selection.active(provider=PRIVATE_PROVIDER, data_class="external")
+        return active if active and active["choice_id"] == state["choice_id"] else None
+
+    active = selected()
+    if not active or not MODEL_NAME.fullmatch(active["model"]):
+        return denied
+
+    def guard() -> str | None:
+        if (
+            inference_deployment.read_candidate_policy() != policy
+            or not _allowed(read_kill_switch)
+            or _identity(onboarding.state()) != _identity(state)
+            or selected() != active
+        ):
+            return "policy_denied"
+        return None
+
+    try:
+        provider = _private_guarded_provider(
+            settings,
+            onboarding,
+            state["key_ref"],
+            active["model"],
+            guard,
+            lambda: deadline - time.monotonic(),
+        )
+    except (InferenceError, OnboardingError, OSError, ValueError):
+        return denied
+
+    ledger = Ledger(base / "private-ledger.db", settings.budget)
+    audit = AuditLog(base / "advice" / "audit.jsonl")
+
+    def emit(event: dict) -> None:
+        audit.append(
+            event["event"],
+            generation=policy.generation,
+            **{key: value for key, value in event.items() if key != "event"},
+        )
+
+    try:
+        inference = InferenceService(
+            provider,
+            ledger,
+            Policy(local_only=False, share=frozenset(settings.share)),
+            prices={PRIVATE_PROVIDER: _budget_price(settings.budget)},
+            max_attempts=1,
+            audit=emit,
+        )
         outcome = inference.run(
             ADVICE_TASK, items, scope, expected_sources=sources, deadline=deadline
         )
@@ -1120,7 +1644,7 @@ def _wait_for_advice_ready(base: Path, *, timeout: float = 5.0) -> None:
     raise TimeoutError("managed advice listeners did not become ready")
 
 
-def _serve_managed_advice() -> None:
+def _serve_managed_advice(*, private: bool = False) -> None:
     if os.environ.pop("LISTEN_PID", None) != str(os.getpid()):
         raise ValueError("invalid systemd listener PID")
     if os.environ.pop("LISTEN_FDS", None) != "2":
@@ -1128,7 +1652,7 @@ def _serve_managed_advice() -> None:
     names = os.environ.pop("LISTEN_FDNAMES", "").split(":")
     if sorted(names) != sorted(MANAGED_ROLES):
         raise ValueError("unexpected systemd advice listener names")
-    accounts = _managed_advice_accounts()
+    accounts = _managed_advice_accounts(private=private)
     if not _trusted_directory(MANAGED_DIRECTORY):
         raise PermissionError("untrusted advice socket directory")
     directory = MANAGED_DIRECTORY.lstat()
@@ -1176,7 +1700,7 @@ class _CandidateInventory(OllamaProvider):
 
 def _local_candidate_tick() -> dict:
     policy = _read_policy(_read_candidate)
-    if policy is None or policy.generation is None:
+    if policy is None or policy.generation is None or policy.private_provider is not None:
         return {"status": "unavailable", "reason": "applied_policy_unavailable"}
 
     def builder(ai: Ai) -> InferenceProvider:
@@ -1193,15 +1717,27 @@ def _local_candidate_tick() -> dict:
     )
 
 
+def _private_candidate_tick() -> dict:
+    policy = _read_policy(_read_candidate)
+    if policy is None or policy.private_provider is None:
+        return {"status": "unavailable", "reason": "applied_policy_unavailable"}
+    return run_once(
+        read_policy=_read_candidate,
+        state_dir=STATE_DIR,
+        kill_switch=read_kill_switch,
+        candidate_policy=policy,
+    )
+
+
 def main() -> None:
     args = sys.argv[1:]
-    if args == ["_managed-admin"]:
+    if args in (["_managed-admin"], ["_managed-private-admin"]):
         os.umask(0o077)
-        _serve_managed_admin()
+        _serve_managed_admin(private=args[0] == "_managed-private-admin")
         return
-    if args == ["_managed-advice"]:
+    if args in (["_managed-advice"], ["_managed-private-advice"]):
         os.umask(0o077)
-        _serve_managed_advice()
+        _serve_managed_advice(private=args[0] == "_managed-private-advice")
         return
     if args == ["_wait-for-advice-ready"]:
         _wait_for_advice_ready(STATE_DIR / "advice")
@@ -1210,6 +1746,11 @@ def main() -> None:
         os.umask(0o077)
         _managed_admin_uid()
         print(json.dumps(_local_candidate_tick(), sort_keys=True))
+        return
+    if args == ["_private-candidate-tick"]:
+        os.umask(0o077)
+        _managed_admin_uid(private=True)
+        print(json.dumps(_private_candidate_tick(), sort_keys=True))
         return
     if "ai.provider" in UNAVAILABLE_FEATURES:
         result = {"status": "unavailable", "reason": "ai_provider_unavailable"}

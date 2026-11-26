@@ -7,19 +7,28 @@ dialect only - not behavior of the real providers (see the m6_ai gate spec).
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import os
 import socket
+import ssl
 import threading
 import time
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from inference_fakes import NOW, item, make_ledger, scope
 from steward.adapters import inference as adapters
 from steward.adapters.inference import (
     AnthropicProvider,
     Endpoint,
+    ManagedPrivateHttpsTransport,
     OllamaCloudProvider,
     OllamaProvider,
     OpenAICompatibleProvider,
@@ -38,12 +47,309 @@ from steward.core.inference import (
     estimate_tokens,
     render_prompt,
 )
+from steward.core.inference_endpoint import canonical_private_https_url, public_https_url
 from steward.core.inference_snapshot import build_snapshot
 
 KEY = "sk-test-0123456789abcdefghij"
 TASK = TASKS["contract.count"]
 ANSWER = json.dumps({"item_count": 1, "newest_source": "controller"})
 CLOUD_MODEL = "deepseek-v4.1-flash"
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://10.0.0.1:443", "https://172.31.2.3:8443/api/v1/", "https://192.168.1.2:1/v1.2"],
+)
+def test_canonical_private_https_url(url):
+    assert canonical_private_https_url(url) == url.removesuffix("/")
+    assert not public_https_url(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://10.0.0.1:443/v1",
+        "HTTPS://10.0.0.1:443/v1",
+        "https://10.0.0.1/v1",
+        "https://10.0.0.1:0443/v1",
+        "https://10.0.0.1:0/v1",
+        "https://10.0.0.1:65536/v1",
+        "https://010.0.0.1:443/v1",
+        "https://10.1:443/v1",
+        "https://[::ffff:10.0.0.1]:443/v1",
+        "https://10.0.0.1.example:443/v1",
+        "https://user@10.0.0.1:443/v1",
+        "https://127.0.0.1:443/v1",
+        "https://100.64.0.1:443/v1",
+        "https://169.254.1.1:443/v1",
+        "https://172.32.0.1:443/v1",
+        "https://8.8.8.8:443/v1",
+        "https://10.0.0.1:443/v1?",
+        "https://10.0.0.1:443/v1#",
+        "https://10.0.0.1:443/v1//",
+        "https://10.0.0.1:443//v1",
+        "https://10.0.0.1:443/v1/../v2",
+        "https://10.0.0.1:443/./v1",
+        "https://10.0.0.1:443/v1%2fmodels",
+        "https://10.0.0.1:443/v1\n",
+    ],
+)
+def test_private_https_rejects_noncanonical_urls(url):
+    with pytest.raises(ValueError):
+        canonical_private_https_url(url)
+
+
+PRIVATE_BASE = "https://10.0.0.7:443/v1"
+
+
+def _relay_tls_context(tmp_path, cert_ip):
+    key = ec.generate_private_key(ec.SECP256R1())
+    # The common name matches even for the wrong-IP case. Verification must use the IP SAN.
+    name = x509.Name([x509.NameAttribute(x509.NameOID.COMMON_NAME, "10.0.0.7")])
+    now = datetime.now(UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.IPv4Address(cert_ip))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    pem = cert.public_bytes(serialization.Encoding.PEM)
+    cert_path, key_path = tmp_path / "cert.pem", tmp_path / "key.pem"
+    cert_path.write_bytes(pem)
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert_path, key_path)
+    return context, pem
+
+
+@contextmanager
+def _unix_relay(path, monkeypatch):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        try:
+            listener.bind(str(path))
+        except PermissionError:
+            # The restricted runner allows socketpairs but denies bind and socket
+            # metadata queries. Keep the OpenSSL handshake and I/O on native sockets.
+            client, server = socket.socketpair()
+            with client, server, monkeypatch.context() as patch:
+
+                def connect(sock, address):
+                    assert sock.family == socket.AF_UNIX and address == str(path)
+                    os.dup2(client.fileno(), sock.fileno())
+                    sock.settimeout(sock.gettimeout())
+                    client.close()
+
+                patch.setattr(socket.socket, "connect", connect)
+                patch.setattr(socket.socket, "getsockopt", lambda *_: socket.SOCK_STREAM)
+                patch.setattr(socket.socket, "getpeername", lambda _: "")
+                yield lambda: server
+        else:
+            listener.listen()
+            listener.settimeout(2)
+            yield lambda: listener.accept()[0]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "valid",
+        "completion",
+        "close_delimited",
+        "redirect",
+        "wrong_ip",
+        "untrusted",
+        "stall",
+        "truncated",
+        "truncated_unframed",
+    ],
+)
+def test_managed_private_https_over_unix_relay(tmp_path, monkeypatch, case):
+    context, pem = _relay_tls_context(tmp_path, "10.0.0.8" if case == "wrong_ip" else "10.0.0.7")
+    path = tmp_path / "relay.sock"
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+    transport = ManagedPrivateHttpsTransport(
+        PRIVATE_BASE, path, ca_pem=None if case == "untrusted" else pem
+    )
+    provider = OpenAICompatibleProvider(
+        PRIVATE_BASE, "test-model", api_key=KEY, transport=transport
+    )
+    requests = []
+    failures = []
+    with _unix_relay(path, monkeypatch) as accept:
+
+        def serve():
+            with accept() as conn:
+                conn.settimeout(2)
+                if case == "stall":
+                    # Consume TLS handshake bytes without responding.
+                    conn.setblocking(True)
+                    while chunk := os.read(conn.fileno(), 4096):
+                        requests.append(chunk)
+                    return
+                try:
+                    with (
+                        context.wrap_socket(conn, server_side=True) as tls,
+                        tls.makefile("rb") as stream,
+                    ):
+                        request = stream.readline()
+                        while (line := stream.readline()) not in (b"\r\n", b""):
+                            request += line
+                        requests.append(request)
+                        if case == "redirect":
+                            tls.sendall(
+                                b"HTTP/1.1 302 Found\r\nLocation: https://10.0.0.8/v1/models\r\nContent-Length: 0\r\n\r\n"
+                            )
+                        else:
+                            if case == "completion":
+                                length = int(
+                                    next(
+                                        line.split(b":", 1)[1]
+                                        for line in request.splitlines()
+                                        if line.lower().startswith(b"content-length:")
+                                    )
+                                )
+                                requests.append(json.loads(stream.read(length)))
+                                body = b'{"choices":[{"message":{"content":"{}"},"finish_reason":"stop"}]}'
+                            else:
+                                body = b'{"data":[{"id":"test-model"}]}'
+                            length = len(body) + (case == "truncated")
+                            if case in ("close_delimited", "truncated_unframed"):
+                                if case == "truncated_unframed":
+                                    body = body[:-1]
+                                tls.sendall(b"HTTP/1.0 200 OK\r\n\r\n" + body)
+                                # Let the requester consume the TLS shutdown before the
+                                # socket disappears, as the fixed relay does on EOF.
+                                tls.unwrap().close()
+                            else:
+                                tls.sendall(
+                                    f"HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\n".encode()
+                                    + body
+                                )
+                except ssl.SSLError as exc:
+                    failures.append(exc)
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            if case in ("valid", "close_delimited"):
+                assert provider.list_models() == ["test-model"]
+            elif case == "completion":
+                completion = provider.complete(
+                    "system", "user", schema={}, max_output_tokens=10, timeout_s=1
+                )
+                assert completion.text == "{}"
+            else:
+                with pytest.raises(InferenceError) as exc:
+                    provider.list_models(timeout_s=0.15 if case == "stall" else 1)
+                assert exc.value.error_class == (
+                    "unsupported" if case == "redirect" else "unavailable"
+                )
+        finally:
+            thread.join(timeout=3)
+        assert not thread.is_alive()
+    if case in (
+        "valid",
+        "completion",
+        "close_delimited",
+        "redirect",
+        "truncated",
+        "truncated_unframed",
+    ):
+        request, *bodies = requests
+        if case == "completion":
+            assert request.startswith(b"POST /v1/chat/completions HTTP/1.1\r\n")
+            assert len(bodies) == 1 and bodies[0]["model"] == "test-model"
+        else:
+            assert request.startswith(b"GET /v1/models HTTP/1.1\r\n")
+            assert not bodies
+        assert b"Host: 10.0.0.7:443\r\n" in request
+        assert b"Cache-Control: no-store, no-cache\r\n" in request
+        assert f"Authorization: Bearer {KEY}\r\n".encode() in request
+    elif case == "stall":
+        assert requests and KEY.encode() not in b"".join(requests)
+    else:
+        assert failures and not requests
+
+
+def test_managed_private_https_rejects_endpoint_and_request_overrides(tmp_path):
+    transport = ManagedPrivateHttpsTransport(PRIVATE_BASE, tmp_path / "relay.sock")
+    endpoint = Endpoint.from_url(PRIVATE_BASE)
+    with pytest.raises(ValueError):
+        OpenAICompatibleProvider(
+            PRIVATE_BASE.replace(":443", ""), "test-model", transport=transport
+        )
+    for target, method, path, headers in [
+        (Endpoint.from_url(PRIVATE_BASE.replace("443", "8443")), "GET", "/models", {}),
+        (endpoint, "GET", "/models?redirect=1", {}),
+        (endpoint, "GET", "/models", {"hOsT": "10.0.0.8"}),
+    ]:
+        with pytest.raises(TransportError) as exc:
+            transport.request(target, method, path, headers, None, timeout=1)
+        assert exc.value.kind == "unsafe"
+
+
+def test_managed_private_https_guards_final_check_and_request_write(tmp_path, monkeypatch):
+    events = []
+    held = False
+
+    @contextmanager
+    def hold():
+        nonlocal held
+        held = True
+        try:
+            yield
+        finally:
+            held = False
+
+    class Connection:
+        def connect(self):
+            assert not held
+            events.append("tls")
+
+        def request(self, *_args):
+            assert held
+            events.append("send")
+
+        def getresponse(self):
+            assert not held
+            events.append("read")
+            return self
+
+        status = 200
+
+        def read(self, amt):
+            return b""
+
+        def getheaders(self):
+            return [("Content-Length", "0")]
+
+        def close(self):
+            assert not held
+
+    def check():
+        events.append("locked" if held else "unlocked")
+
+    monkeypatch.setattr(adapters, "_ManagedPrivateHttpsConnection", lambda *_: Connection())
+    transport = ManagedPrivateHttpsTransport(
+        PRIVATE_BASE, tmp_path / "relay.sock", check_admission=check, send_guard=hold
+    )
+    transport.request(Endpoint.from_url(PRIVATE_BASE), "GET", "/models", {}, None, timeout=1)
+    assert events == ["unlocked", "tls", "locked", "send", "read"]
 
 
 # ---- fake server ----------------------------------------------------------------------
