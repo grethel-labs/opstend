@@ -1,0 +1,148 @@
+---
+# Post-deployment proof: the running instance is checked, not the files.
+- name: Activate pending service changes before verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify platform through the host executor
+  ansible.builtin.command:
+    argv: "{{ verify_command + (verify_guarded_arguments if site_guarded | default(false) else []) }}"
+  vars:
+    verify_command: [/opt/steward/current/venv/bin/steward-host, verify, --expect-revision, "{{ steward_config_revision }}"]
+    verify_guarded_arguments:
+      - --deployment-operation-id
+      - "{{ site_identity.operation_id }}"
+      - --deployment-run-id
+      - "{{ site_identity.run_id }}"
+      - --deployment-boot-id
+      - "{{ site_identity.boot_id }}"
+  no_log: "{{ site_guarded | default(false) }}"
+  register: verify_result
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: verify_result.rc == 0
+  when: not ansible_check_mode
+
+- name: Verify that the event log answers
+  ansible.builtin.command:
+    argv:
+      - /opt/steward/current/venv/bin/python
+      - -c
+      - >-
+        from steward.executor.protocol import call;
+        print(call("events_coverage", socket_path="/run/steward-collector/query.sock")["count"])
+  register: verify_events
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: verify_events.rc == 0
+  when: not ansible_check_mode
+
+- name: Verify that unconfigured platform services are stopped and disabled
+  ansible.builtin.command:
+    argv: [systemctl, show, --property=ActiveState, --property=UnitFileState, "{{ item }}"]
+  register: verify_inactive_platform
+  changed_when: false
+  failed_when: >-
+    verify_inactive_platform.rc != 0 or
+    'UnitFileState=disabled' not in verify_inactive_platform.stdout_lines or
+    ('ActiveState=inactive' not in verify_inactive_platform.stdout_lines and
+    'ActiveState=failed' not in verify_inactive_platform.stdout_lines)
+  loop: "{{ steward_inactive_platform_units }}"
+  when: not ansible_check_mode
+
+- name: Verify that the admin UI is reachable through the proxy and closed without a session
+  ansible.builtin.uri:
+    url: "https://localhost:{{ steward_admin.port }}/api/session"
+    ca_path: /etc/steward/pki/ca.crt
+    status_code: 401
+    use_proxy: false
+    follow_redirects: none
+  register: verify_admin
+  retries: 6
+  delay: 5
+  until: verify_admin.status == 401
+  when: not ansible_check_mode
+
+- name: Verify that the numeric private LAN admin endpoint requires a session
+  ansible.builtin.uri:
+    url: "https://{{ steward_admin.lan.bind.split('/')[0] }}:{{ steward_admin.port }}/api/session"
+    ca_path: /etc/steward/pki/ca.crt
+    status_code: 401
+    use_proxy: false
+    follow_redirects: none
+  register: verify_admin_lan
+  retries: 6
+  delay: 5
+  until: verify_admin_lan.status == 401
+  when:
+    - not ansible_check_mode
+    - (steward_admin | default({})).access | default('private') == 'private-lan'
+
+# Every deployment becomes an audit record and thus an event. This appends to a
+# log only; it does not change managed state, hence changed_when: false.
+- name: Record the verified deployment
+  ansible.builtin.command:
+    argv:
+      - /opt/steward/current/venv/bin/steward-host
+      - record-deployment
+      - --revision
+      - "{{ steward_config_revision }}"
+      - --release
+      - "{{ steward_release.version }}"
+  changed_when: false
+  when: not ansible_check_mode and not (site_guarded | default(false))
+
+- name: Record the verified platform activation
+  ansible.builtin.copy:
+    dest: /etc/steward/platform-activation
+    content: "{{ platform_activation_fingerprint }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Verify configured backup service is running
+  ansible.builtin.command:
+    argv: [systemctl, is-active, --quiet, steward-backup.service]
+  register: verify_backup_service
+  changed_when: false
+  retries: 6
+  delay: 5
+  until: verify_backup_service.rc == 0
+  when: steward_backup.enabled and not ansible_check_mode
+
+- name: Record the verified backup activation
+  ansible.builtin.copy:
+    dest: /etc/steward/backup-activation
+    content: "{{ platform_backup_activation_fingerprint }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when: steward_backup.enabled and not ansible_check_mode
+
+- name: Authorize boot only after verifying the candidate deployment
+  ansible.builtin.include_tasks: application-boot.yml
+  when:
+    - not ansible_check_mode
+    - identities_application_boot_previous | default(false) or identities_application_active_users | default([]) | length > 0
+
+- name: Retire ordering for dedicated application managers without active workloads
+  ansible.builtin.include_tasks: application-boot-cleanup.yml
+  when:
+    - not ansible_check_mode
+    - >-
+      identities_application_boot_previous | default(false) or
+      workloads_application_boot_uids is defined or
+      (identities_application_manifest.stat.exists | default(false))
+
+- name: Mark installation complete after successful verification
+  ansible.builtin.copy:
+    dest: /etc/steward/install.json
+    content: "{{ {'server_name': steward_server_name, 'schema_version': 1, 'state': 'installed'} | to_json }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: not ansible_check_mode and not (site_guarded | default(false))

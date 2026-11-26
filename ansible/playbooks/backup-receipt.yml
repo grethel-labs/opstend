@@ -1,0 +1,32 @@
+---
+- name: Read one exact completed backup receipt
+  hosts: all
+  become: true
+  tasks:
+    - name: Query the local backup worker as the operator
+      ansible.builtin.command:
+        argv:
+          - /opt/steward/current/venv/bin/steward-host
+          - backup-receipt
+          - "{{ steward_backup_project }}"
+          - --config-revision
+          - "{{ steward_backup_config_revision }}"
+          - --repository-id
+          - "{{ steward_backup_repository_id }}"
+          - --capture-id
+          - "{{ steward_backup_capture_id }}"
+          - --snapshot-id
+          - "{{ steward_backup_snapshot_id }}"
+      register: steward_backup_receipt
+      changed_when: false
+      no_log: true
+
+    - name: Store the private response on the controller
+      ansible.builtin.copy:
+        content: "{{ steward_backup_receipt.stdout }}"
+        dest: "{{ steward_local_dir }}/backup-receipt-result.json"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      no_log: true

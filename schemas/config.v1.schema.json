@@ -1,0 +1,2773 @@
+{
+  "$defs": {
+    "Admin": {
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "default": "private",
+          "enum": [
+            "private",
+            "private-loopback",
+            "private-lan",
+            "public"
+          ],
+          "title": "Access",
+          "type": "string"
+        },
+        "backend_port": {
+          "default": 9080,
+          "maximum": 65535,
+          "minimum": 1024,
+          "title": "Backend Port",
+          "type": "integer"
+        },
+        "hostname": {
+          "default": "localhost",
+          "maxLength": 253,
+          "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$",
+          "title": "Hostname",
+          "type": "string"
+        },
+        "lan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminLan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "port": {
+          "default": 9443,
+          "description": "Admin TLS port on the host.",
+          "maximum": 65535,
+          "minimum": 1024,
+          "title": "Port",
+          "type": "integer"
+        },
+        "session_ttl_minutes": {
+          "default": 480,
+          "maximum": 1440,
+          "minimum": 5,
+          "title": "Session Ttl Minutes",
+          "type": "integer"
+        },
+        "token_ref": {
+          "pattern": "^(env:[A-Za-z_][A-Za-z0-9_]*|file:[^\\x00\\n]+)$",
+          "title": "Token Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token_ref"
+      ],
+      "title": "Admin",
+      "type": "object"
+    },
+    "AdminLan": {
+      "additionalProperties": false,
+      "properties": {
+        "advertise_ipv4": {
+          "anyOf": [
+            {
+              "format": "ipv4",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Advertise Ipv4"
+        },
+        "allowed_sources": {
+          "description": "Private source CIDRs. An empty list uses the bind network.",
+          "items": {
+            "format": "ipv4network",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Allowed Sources",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "bind": {
+          "anyOf": [
+            {
+              "format": "ipv4interface",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bind"
+        },
+        "interface": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Interface"
+        }
+      },
+      "title": "AdminLan",
+      "type": "object"
+    },
+    "Ai": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key_ref": {
+          "anyOf": [
+            {
+              "pattern": "^(env:[A-Za-z_][A-Za-z0-9_]*|file:[^\\x00\\n]+)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Api Key Ref"
+        },
+        "base_url": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "pattern": "^https?://[^\\s]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Base Url"
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AiBudget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fx": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AiFx"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "local": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AiLocal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "local_only": {
+          "default": true,
+          "title": "Local Only",
+          "type": "boolean"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "model_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AiModelPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provider": {
+          "default": "none",
+          "enum": [
+            "none",
+            "ollama",
+            "openai",
+            "anthropic",
+            "openai-compatible",
+            "ollama-cloud-api"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "share": {
+          "items": {
+            "enum": [
+              "status",
+              "events",
+              "backups",
+              "vulnerabilities",
+              "logs"
+            ],
+            "type": "string"
+          },
+          "maxItems": 5,
+          "title": "Share",
+          "type": "array"
+        }
+      },
+      "title": "Ai",
+      "type": "object"
+    },
+    "AiBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "max_concurrent": {
+          "default": 1,
+          "maximum": 8,
+          "minimum": 1,
+          "title": "Max Concurrent",
+          "type": "integer"
+        },
+        "monthly": {
+          "$ref": "#/$defs/AiScopeLimits",
+          "default": {
+            "cost_micro": null,
+            "seconds": null,
+            "tokens": null
+          }
+        },
+        "per_project": {
+          "$ref": "#/$defs/AiScopeLimits",
+          "default": {
+            "cost_micro": null,
+            "seconds": null,
+            "tokens": null
+          }
+        },
+        "price": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AiPrice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "AiBudget",
+      "type": "object"
+    },
+    "AiFx": {
+      "additionalProperties": false,
+      "description": "Exchange rate between the price currency and the budget unit (decision 7).\n\n`operator`: the operator sets `rate_ppm` with its date. `fetched`: one fixed HTTPS source\n(`source_url`, fixed parser) is read inside the maintenance window. The automatic\n`ecb_daily_xml_v1` parser requires the exact ECB daily XML URL and returns EUR per USD.\nAutomatic refresh requires `ai.local_only: false`. A rate older than `max_age_days`\nmakes cost-limited reservations deny.",
+      "properties": {
+        "as_of": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "As Of"
+        },
+        "max_age_days": {
+          "default": 7,
+          "maximum": 90,
+          "minimum": 1,
+          "title": "Max Age Days",
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "operator",
+            "fetched"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "parser": {
+          "anyOf": [
+            {
+              "enum": [
+                "json_rate_v1",
+                "ecb_daily_xml_v1"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ecb_daily_xml_v1 requires source_url https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml.",
+          "title": "Parser"
+        },
+        "rate_ppm": {
+          "anyOf": [
+            {
+              "maximum": 1000000000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "1000000 = parity.",
+          "title": "Rate Ppm"
+        },
+        "source_url": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "pattern": "^https://[^\\s]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Url"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "AiFx",
+      "type": "object"
+    },
+    "AiLocal": {
+      "additionalProperties": false,
+      "description": "Operator-declared limits of the local model (checked before any download).",
+      "properties": {
+        "device": {
+          "const": "cpu",
+          "default": "cpu",
+          "title": "Device",
+          "type": "string"
+        },
+        "disk_mb": {
+          "maximum": 10000000,
+          "minimum": 1,
+          "title": "Disk Mb",
+          "type": "integer"
+        },
+        "download_mb": {
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Download Mb",
+          "type": "integer"
+        },
+        "license_ack": {
+          "default": false,
+          "description": "The operator accepted the model's license.",
+          "title": "License Ack",
+          "type": "boolean"
+        },
+        "ram_mb": {
+          "maximum": 1048576,
+          "minimum": 128,
+          "title": "Ram Mb",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "download_mb",
+        "ram_mb",
+        "disk_mb"
+      ],
+      "title": "AiLocal",
+      "type": "object"
+    },
+    "AiModelPolicy": {
+      "additionalProperties": false,
+      "description": "Selection rule (ADR 0002 section 2): families and an evaluation budget, not a model.\n\nThe weekly selection (A05) only ever switches within the configured provider and data\nclass; it never expands sharing or changes the provider.",
+      "properties": {
+        "evaluate": {
+          "const": "weekly",
+          "default": "weekly",
+          "title": "Evaluate",
+          "type": "string"
+        },
+        "families": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9-]{1,23}$",
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "title": "Families",
+          "type": "array"
+        },
+        "max_eval_cost_micro": {
+          "anyOf": [
+            {
+              "maximum": 1000000000000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Eval Cost Micro"
+        },
+        "max_eval_tokens": {
+          "maximum": 10000000,
+          "minimum": 1000,
+          "title": "Max Eval Tokens",
+          "type": "integer"
+        },
+        "price_max_age_days": {
+          "default": 35,
+          "maximum": 120,
+          "minimum": 1,
+          "title": "Price Max Age Days",
+          "type": "integer"
+        },
+        "prices": {
+          "items": {
+            "$ref": "#/$defs/AiModelPrice"
+          },
+          "maxItems": 64,
+          "title": "Prices",
+          "type": "array"
+        }
+      },
+      "required": [
+        "families",
+        "max_eval_tokens"
+      ],
+      "title": "AiModelPolicy",
+      "type": "object"
+    },
+    "AiModelPrice": {
+      "additionalProperties": false,
+      "description": "Operator-declared price of one model with its date; stale prices block a switch.",
+      "properties": {
+        "as_of": {
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "title": "As Of",
+          "type": "string"
+        },
+        "input_per_mtok_micro": {
+          "maximum": 1000000000000,
+          "minimum": 0,
+          "title": "Input Per Mtok Micro",
+          "type": "integer"
+        },
+        "model": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+          "title": "Model",
+          "type": "string"
+        },
+        "output_per_mtok_micro": {
+          "maximum": 1000000000000,
+          "minimum": 0,
+          "title": "Output Per Mtok Micro",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "model",
+        "input_per_mtok_micro",
+        "output_per_mtok_micro",
+        "as_of"
+      ],
+      "title": "AiModelPrice",
+      "type": "object"
+    },
+    "AiPrice": {
+      "additionalProperties": false,
+      "description": "Operator-declared prices in budget-currency micro-units per million tokens.",
+      "properties": {
+        "input_per_mtok_micro": {
+          "maximum": 1000000000000,
+          "minimum": 0,
+          "title": "Input Per Mtok Micro",
+          "type": "integer"
+        },
+        "output_per_mtok_micro": {
+          "maximum": 1000000000000,
+          "minimum": 0,
+          "title": "Output Per Mtok Micro",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input_per_mtok_micro",
+        "output_per_mtok_micro"
+      ],
+      "title": "AiPrice",
+      "type": "object"
+    },
+    "AiScopeLimits": {
+      "additionalProperties": false,
+      "description": "Per-window (UTC calendar month) limits for one budget scope; unset = not limited.",
+      "properties": {
+        "cost_micro": {
+          "anyOf": [
+            {
+              "maximum": 1000000000000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Micro"
+        },
+        "seconds": {
+          "anyOf": [
+            {
+              "maximum": 100000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seconds"
+        },
+        "tokens": {
+          "anyOf": [
+            {
+              "maximum": 1000000000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tokens"
+        }
+      },
+      "title": "AiScopeLimits",
+      "type": "object"
+    },
+    "Application": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$",
+          "title": "Id",
+          "type": "string"
+        },
+        "instruction": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Operator-authored application-wide goals for workload contract proposals. These goals take precedence over repository instructions and grant no authority to apply a proposal.",
+          "title": "Instruction"
+        },
+        "isolation": {
+          "default": "separate",
+          "enum": [
+            "shared",
+            "separate"
+          ],
+          "title": "Isolation",
+          "type": "string"
+        },
+        "on_critical": {
+          "anyOf": [
+            {
+              "enum": [
+                "quarantine",
+                "notify"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Critical exposed finding response (unset: quarantine; ADR 0002 section 5).",
+          "title": "On Critical"
+        },
+        "services": {
+          "items": {
+            "$ref": "#/$defs/Service"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Services",
+          "type": "array"
+        },
+        "stateless": {
+          "default": false,
+          "description": "Explicit contract that the application keeps no data: containment may stop it without a backup. Not inferred from missing data; needs `data_path: null`.",
+          "title": "Stateless",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "services"
+      ],
+      "title": "Application",
+      "type": "object"
+    },
+    "Automation": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "default": "observe",
+          "enum": [
+            "observe",
+            "patch",
+            "repair"
+          ],
+          "title": "Profile",
+          "type": "string"
+        }
+      },
+      "title": "Automation",
+      "type": "object"
+    },
+    "Backup": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "then": {
+            "properties": {
+              "endpoint": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "password_ref": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "repository_ref": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            },
+            "required": [
+              "endpoint",
+              "repository_ref",
+              "password_ref"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "username_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "username_ref"
+            ]
+          },
+          "then": {
+            "properties": {
+              "auth_password_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "auth_password_ref"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "auth_password_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "auth_password_ref"
+            ]
+          },
+          "then": {
+            "properties": {
+              "username_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "username_ref"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "auth_password_ref": {
+          "anyOf": [
+            {
+              "pattern": "^(env:[A-Za-z_][A-Za-z0-9_]*|file:[^\\x00\\n]+)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Auth Password Ref"
+        },
+        "ca_ref": {
+          "anyOf": [
+            {
+              "pattern": "^(env:[A-Za-z_][A-Za-z0-9_]*|file:[^\\x00\\n]+)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ca Ref"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BackupEndpoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "interval_s": {
+          "default": 86400,
+          "maximum": 604800,
+          "minimum": 3600,
+          "title": "Interval S",
+          "type": "integer"
+        },
+        "max_mib": {
+          "default": 256,
+          "maximum": 1024,
+          "minimum": 1,
+          "title": "Max Mib",
+          "type": "integer"
+        },
+        "password_ref": {
+          "anyOf": [
+            {
+              "pattern": "^(env:[A-Za-z_][A-Za-z0-9_]*|file:[^\\x00\\n]+)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Password Ref"
+        },
+        "repository_ref": {
+          "anyOf": [
+            {
+              "pattern": "^(env:[A-Za-z_][A-Za-z0-9_]*|file:[^\\x00\\n]+)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Ref"
+        },
+        "username_ref": {
+          "anyOf": [
+            {
+              "pattern": "^(env:[A-Za-z_][A-Za-z0-9_]*|file:[^\\x00\\n]+)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Username Ref"
+        }
+      },
+      "title": "Backup",
+      "type": "object"
+    },
+    "BackupEndpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "addresses": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Addresses",
+          "type": "array"
+        },
+        "host": {
+          "maxLength": 253,
+          "minLength": 1,
+          "title": "Host",
+          "type": "string"
+        },
+        "port": {
+          "default": 443,
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Port",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "host",
+        "addresses"
+      ],
+      "title": "BackupEndpoint",
+      "type": "object"
+    },
+    "Bot": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoints": {
+          "items": {
+            "$ref": "#/$defs/QueryEndpoint"
+          },
+          "maxItems": 16,
+          "title": "Endpoints",
+          "type": "array"
+        },
+        "port": {
+          "default": 9090,
+          "maximum": 65535,
+          "minimum": 1024,
+          "title": "Port",
+          "type": "integer"
+        },
+        "public_hostname": {
+          "anyOf": [
+            {
+              "maxLength": 253,
+              "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Public Hostname"
+        }
+      },
+      "title": "Bot",
+      "type": "object"
+    },
+    "BuildPolicy": {
+      "additionalProperties": false,
+      "description": "Isolated repository builds (R03). The container tier is weaker than VM isolation.",
+      "properties": {
+        "allow_container_isolation": {
+          "default": false,
+          "description": "Permit the rootless dedicated-user build tier, labelled 'container isolation, no VM protection' in all evidence.",
+          "title": "Allow Container Isolation",
+          "type": "boolean"
+        },
+        "cpus": {
+          "default": 2.0,
+          "exclusiveMinimum": 0,
+          "maximum": 64,
+          "title": "Cpus",
+          "type": "number"
+        },
+        "disk_mb": {
+          "default": 4096,
+          "maximum": 1048576,
+          "minimum": 256,
+          "title": "Disk Mb",
+          "type": "integer"
+        },
+        "log_kb": {
+          "default": 1024,
+          "description": "Kept build output, kilobytes.",
+          "maximum": 16384,
+          "minimum": 16,
+          "title": "Log Kb",
+          "type": "integer"
+        },
+        "memory_mb": {
+          "default": 2048,
+          "maximum": 65536,
+          "minimum": 256,
+          "title": "Memory Mb",
+          "type": "integer"
+        },
+        "minimum_isolation": {
+          "anyOf": [
+            {
+              "enum": [
+                "ephemeral_vm",
+                "external_ci",
+                "container_rootless"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum Isolation"
+        },
+        "package_sources": {
+          "description": "Hosts the build network may reach (package and base-image sources).",
+          "items": {
+            "maxLength": 253,
+            "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Package Sources",
+          "type": "array"
+        },
+        "pids": {
+          "default": 512,
+          "maximum": 32768,
+          "minimum": 32,
+          "title": "Pids",
+          "type": "integer"
+        },
+        "timeout_s": {
+          "default": 1800,
+          "maximum": 14400,
+          "minimum": 60,
+          "title": "Timeout S",
+          "type": "integer"
+        }
+      },
+      "title": "BuildPolicy",
+      "type": "object"
+    },
+    "Channel": {
+      "additionalProperties": false,
+      "description": "Outbound notification destination; credentials stay in secret references.",
+      "properties": {
+        "adapter": {
+          "enum": [
+            "discord",
+            "webhook"
+          ],
+          "title": "Adapter",
+          "type": "string"
+        },
+        "audit_export": {
+          "default": false,
+          "title": "Audit Export",
+          "type": "boolean"
+        },
+        "heartbeat_interval_s": {
+          "anyOf": [
+            {
+              "maximum": 3600,
+              "minimum": 30,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Heartbeat Interval S"
+        },
+        "id": {
+          "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$",
+          "title": "Id",
+          "type": "string"
+        },
+        "signing_key_ref": {
+          "anyOf": [
+            {
+              "pattern": "^(env:[A-Za-z_][A-Za-z0-9_]*|file:[^\\x00\\n]+)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Signing Key Ref"
+        },
+        "url_ref": {
+          "pattern": "^(env:[A-Za-z_][A-Za-z0-9_]*|file:[^\\x00\\n]+)$",
+          "title": "Url Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "adapter",
+        "url_ref"
+      ],
+      "title": "Channel",
+      "type": "object"
+    },
+    "ContractBackup": {
+      "additionalProperties": false,
+      "properties": {
+        "database": {
+          "anyOf": [
+            {
+              "enum": [
+                "postgres",
+                "mysql",
+                "sqlite"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Database"
+        },
+        "strategy": {
+          "default": "none",
+          "enum": [
+            "none",
+            "data-path",
+            "database-dump"
+          ],
+          "title": "Strategy",
+          "type": "string"
+        }
+      },
+      "title": "ContractBackup",
+      "type": "object"
+    },
+    "ContractBuild": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "default": ".",
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
+          "title": "Context",
+          "type": "string"
+        },
+        "file": {
+          "default": "Dockerfile",
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
+          "title": "File",
+          "type": "string"
+        },
+        "kind": {
+          "const": "dockerfile",
+          "default": "dockerfile",
+          "title": "Kind",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        }
+      },
+      "title": "ContractBuild",
+      "type": "object"
+    },
+    "ContractRequirements": {
+      "additionalProperties": false,
+      "description": "What the workload asks of its isolation. Safe values are the defaults; the\nsuitability check rejects the rest regardless of what a proposer claims.",
+      "properties": {
+        "add_capabilities": {
+          "items": {
+            "pattern": "^CAP_[A-Z_]{1,40}$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Add Capabilities",
+          "type": "array"
+        },
+        "devices": {
+          "items": {
+            "pattern": "^/dev/[A-Za-z0-9._/-]{1,60}$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Devices",
+          "type": "array"
+        },
+        "engine_socket": {
+          "default": false,
+          "title": "Engine Socket",
+          "type": "boolean"
+        },
+        "host_network": {
+          "default": false,
+          "title": "Host Network",
+          "type": "boolean"
+        },
+        "privileged": {
+          "default": false,
+          "title": "Privileged",
+          "type": "boolean"
+        },
+        "production_secrets": {
+          "items": {
+            "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Production Secrets",
+          "type": "array"
+        },
+        "read_only_rootfs": {
+          "default": true,
+          "title": "Read Only Rootfs",
+          "type": "boolean"
+        }
+      },
+      "title": "ContractRequirements",
+      "type": "object"
+    },
+    "Egress": {
+      "additionalProperties": false,
+      "description": "Outbound policy, enforced per service UID in nftables (IPv4 and IPv6).\n\n`public-web` allows DNS via the host resolver plus TCP 80/443 to public\naddresses. It is not a domain allowlist.",
+      "properties": {
+        "mode": {
+          "default": "none",
+          "enum": [
+            "none",
+            "public-web",
+            "rules"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "rules": {
+          "items": {
+            "$ref": "#/$defs/EgressRule"
+          },
+          "maxItems": 32,
+          "title": "Rules",
+          "type": "array"
+        }
+      },
+      "title": "Egress",
+      "type": "object"
+    },
+    "EgressRule": {
+      "additionalProperties": false,
+      "properties": {
+        "cidr": {
+          "title": "Cidr",
+          "type": "string"
+        },
+        "ports": {
+          "items": {
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Ports",
+          "type": "array"
+        },
+        "proto": {
+          "enum": [
+            "tcp",
+            "udp"
+          ],
+          "title": "Proto",
+          "type": "string"
+        }
+      },
+      "required": [
+        "proto",
+        "cidr",
+        "ports"
+      ],
+      "title": "EgressRule",
+      "type": "object"
+    },
+    "Events": {
+      "additionalProperties": false,
+      "description": "Bounded event log kept by the collector.",
+      "properties": {
+        "max_events": {
+          "default": 200000,
+          "maximum": 5000000,
+          "minimum": 1000,
+          "title": "Max Events",
+          "type": "integer"
+        },
+        "retention_days": {
+          "default": 30,
+          "maximum": 365,
+          "minimum": 1,
+          "title": "Retention Days",
+          "type": "integer"
+        }
+      },
+      "title": "Events",
+      "type": "object"
+    },
+    "FirewallHardening": {
+      "additionalProperties": false,
+      "properties": {
+        "manage": {
+          "default": true,
+          "title": "Manage",
+          "type": "boolean"
+        }
+      },
+      "title": "FirewallHardening",
+      "type": "object"
+    },
+    "Hardening": {
+      "additionalProperties": false,
+      "properties": {
+        "firewall": {
+          "$ref": "#/$defs/FirewallHardening",
+          "default": {
+            "manage": true
+          }
+        },
+        "journald": {
+          "$ref": "#/$defs/Journald",
+          "default": {
+            "retention_days": 30,
+            "system_max_use_mb": 500
+          }
+        },
+        "ssh": {
+          "$ref": "#/$defs/SshHardening",
+          "default": {
+            "manage": true,
+            "password_authentication": false,
+            "permit_root_login": "prohibit-password"
+          }
+        },
+        "unattended_security_upgrades": {
+          "default": true,
+          "title": "Unattended Security Upgrades",
+          "type": "boolean"
+        }
+      },
+      "title": "Hardening",
+      "type": "object"
+    },
+    "Health": {
+      "additionalProperties": false,
+      "properties": {
+        "interval_s": {
+          "default": 30,
+          "maximum": 3600,
+          "minimum": 5,
+          "title": "Interval S",
+          "type": "integer"
+        },
+        "max_response_ms": {
+          "anyOf": [
+            {
+              "maximum": 60000,
+              "minimum": 50,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A healthy answer slower than this counts as a hang.",
+          "title": "Max Response Ms"
+        },
+        "path": {
+          "default": "/healthz",
+          "pattern": "^/[A-Za-z0-9._~/-]{0,200}$",
+          "title": "Path",
+          "type": "string"
+        },
+        "probe": {
+          "anyOf": [
+            {
+              "enum": [
+                "http",
+                "tcp",
+                "container"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Probe kind; unset means http. tcp checks the loopback port accepts; container runs the image's own declared healthcheck.",
+          "title": "Probe"
+        },
+        "retries": {
+          "default": 3,
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Retries",
+          "type": "integer"
+        },
+        "timeout_s": {
+          "default": 5,
+          "maximum": 60,
+          "minimum": 1,
+          "title": "Timeout S",
+          "type": "integer"
+        }
+      },
+      "title": "Health",
+      "type": "object"
+    },
+    "Journald": {
+      "additionalProperties": false,
+      "properties": {
+        "retention_days": {
+          "default": 30,
+          "maximum": 365,
+          "minimum": 1,
+          "title": "Retention Days",
+          "type": "integer"
+        },
+        "system_max_use_mb": {
+          "default": 500,
+          "maximum": 20000,
+          "minimum": 50,
+          "title": "System Max Use Mb",
+          "type": "integer"
+        }
+      },
+      "title": "Journald",
+      "type": "object"
+    },
+    "Maintenance": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_backup_pause": {
+          "default": false,
+          "description": "Permit the operator's registered backup capture to pause this workload.",
+          "title": "Allow Backup Pause",
+          "type": "boolean"
+        },
+        "allow_restart": {
+          "default": true,
+          "description": "Maintenance contract for restarts: lets the controller restart this service when it is down or unhealthy (budgeted, audited). Set false to exempt it.",
+          "title": "Allow Restart",
+          "type": "boolean"
+        }
+      },
+      "title": "Maintenance",
+      "type": "object"
+    },
+    "MaintenanceEmergency": {
+      "additionalProperties": false,
+      "properties": {
+        "immediate_if_known_exploited": {
+          "default": true,
+          "description": "Disconnect a known-exploited, network-reachable service without notice.",
+          "title": "Immediate If Known Exploited",
+          "type": "boolean"
+        },
+        "notice_minutes": {
+          "default": 60,
+          "description": "Notice before an unscheduled one-hour window opens.",
+          "maximum": 1440,
+          "minimum": 15,
+          "title": "Notice Minutes",
+          "type": "integer"
+        }
+      },
+      "title": "MaintenanceEmergency",
+      "type": "object"
+    },
+    "MaintenancePolicy": {
+      "additionalProperties": false,
+      "description": "Server-wide maintenance windows (ADR 0002 section 8).\n\nDistinct from the per-workload `Maintenance` contract on projects/services.",
+      "properties": {
+        "allow_reboot": {
+          "default": false,
+          "description": "Explicit consent for host reboots in a window.",
+          "title": "Allow Reboot",
+          "type": "boolean"
+        },
+        "drills": {
+          "items": {
+            "enum": [
+              "resources",
+              "restart",
+              "restore"
+            ],
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Drills",
+          "type": "array"
+        },
+        "emergency": {
+          "$ref": "#/$defs/MaintenanceEmergency",
+          "default": {
+            "immediate_if_known_exploited": true,
+            "notice_minutes": 60
+          }
+        },
+        "weekly_window": {
+          "description": "Fixed one-hour window, for example 'Sun 03:00 Europe/Berlin'.",
+          "title": "Weekly Window",
+          "type": "string"
+        }
+      },
+      "required": [
+        "weekly_window"
+      ],
+      "title": "MaintenancePolicy",
+      "type": "object"
+    },
+    "Project": {
+      "additionalProperties": false,
+      "description": "Workload contract for one isolated service.",
+      "properties": {
+        "bundle": {
+          "anyOf": [
+            {
+              "const": "sample-notes",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Mount an application shipped with the release read-only at /app.",
+          "title": "Bundle"
+        },
+        "command": {
+          "items": {
+            "pattern": "^[A-Za-z0-9@%+=:,./_-]{1,200}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Command",
+          "type": "array"
+        },
+        "container_port": {
+          "default": 8080,
+          "maximum": 65535,
+          "minimum": 1024,
+          "title": "Container Port",
+          "type": "integer"
+        },
+        "data_path": {
+          "anyOf": [
+            {
+              "pattern": "^/[A-Za-z0-9._~/-]{0,200}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "/data",
+          "description": "Persistent data mount point.",
+          "title": "Data Path"
+        },
+        "deploy": {
+          "default": true,
+          "description": "false: stop the service, keep its data.",
+          "title": "Deploy",
+          "type": "boolean"
+        },
+        "egress": {
+          "$ref": "#/$defs/Egress",
+          "default": {
+            "mode": "none",
+            "rules": []
+          }
+        },
+        "health": {
+          "$ref": "#/$defs/Health",
+          "default": {
+            "interval_s": 30,
+            "max_response_ms": null,
+            "path": "/healthz",
+            "probe": null,
+            "retries": 3,
+            "timeout_s": 5
+          }
+        },
+        "host_port": {
+          "description": "Loopback port, proxy-only.",
+          "maximum": 29999,
+          "minimum": 20000,
+          "title": "Host Port",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$",
+          "title": "Id",
+          "type": "string"
+        },
+        "image": {
+          "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[a-f0-9]{64}$",
+          "title": "Image",
+          "type": "string"
+        },
+        "maintenance": {
+          "$ref": "#/$defs/Maintenance",
+          "default": {
+            "allow_backup_pause": false,
+            "allow_restart": true
+          }
+        },
+        "manage": {
+          "default": true,
+          "description": "false: skip this project entirely.",
+          "title": "Manage",
+          "type": "boolean"
+        },
+        "resources": {
+          "$ref": "#/$defs/Resources",
+          "default": {
+            "cpus": 0.5,
+            "log_burst": 10000,
+            "memory_mb": 256,
+            "pids": 128
+          }
+        },
+        "routes": {
+          "items": {
+            "$ref": "#/$defs/Route"
+          },
+          "maxItems": 8,
+          "title": "Routes",
+          "type": "array"
+        },
+        "run_as": {
+          "default": 10001,
+          "description": "UID/GID inside the container.",
+          "maximum": 60000,
+          "minimum": 1000,
+          "title": "Run As",
+          "type": "integer"
+        },
+        "secrets": {
+          "items": {
+            "$ref": "#/$defs/SecretBinding"
+          },
+          "maxItems": 32,
+          "title": "Secrets",
+          "type": "array"
+        },
+        "source_revision": {
+          "pattern": "^[A-Za-z0-9@:._/+-]{1,200}$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "update": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UpdatePolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Verified image update contract (unavailable until patch acceptance)."
+        }
+      },
+      "required": [
+        "id",
+        "image",
+        "source_revision",
+        "host_port"
+      ],
+      "title": "Project",
+      "type": "object"
+    },
+    "Proxy": {
+      "additionalProperties": false,
+      "properties": {
+        "acme_email": {
+          "anyOf": [
+            {
+              "pattern": "^[^@\\s\\\"']+@[^@\\s\\\"']+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acme Email"
+        },
+        "image": {
+          "default": "docker.io/library/traefik@sha256:44b61e76a251fe586d17d881fc900452d0a7b4a4b08c97ce6eac86d45b4c8b9d",
+          "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[a-f0-9]{64}$",
+          "title": "Image",
+          "type": "string"
+        },
+        "image_version": {
+          "default": "v3.7.19",
+          "pattern": "^[A-Za-z0-9._-]{1,40}$",
+          "title": "Image Version",
+          "type": "string"
+        },
+        "memory_mb": {
+          "default": 192,
+          "maximum": 4096,
+          "minimum": 64,
+          "title": "Memory Mb",
+          "type": "integer"
+        }
+      },
+      "title": "Proxy",
+      "type": "object"
+    },
+    "QueryEndpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "enum": [
+            "webhook",
+            "discord"
+          ],
+          "title": "Adapter",
+          "type": "string"
+        },
+        "application_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9]{1,30}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Application Id"
+        },
+        "grants": {
+          "items": {
+            "$ref": "#/$defs/QueryGrant"
+          },
+          "maxItems": 100,
+          "title": "Grants",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$",
+          "title": "Id",
+          "type": "string"
+        },
+        "verification_key_ref": {
+          "pattern": "^(env:[A-Za-z_][A-Za-z0-9_]*|file:[^\\x00\\n]+)$",
+          "title": "Verification Key Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "adapter",
+        "verification_key_ref"
+      ],
+      "title": "QueryEndpoint",
+      "type": "object"
+    },
+    "QueryGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "default": false,
+          "title": "Host",
+          "type": "boolean"
+        },
+        "projects": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Projects",
+          "type": "array"
+        },
+        "tenant": {
+          "pattern": "^[A-Za-z0-9_-]{1,100}$",
+          "title": "Tenant",
+          "type": "string"
+        },
+        "user": {
+          "pattern": "^[A-Za-z0-9_-]{1,100}$",
+          "title": "User",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tenant",
+        "user"
+      ],
+      "title": "QueryGrant",
+      "type": "object"
+    },
+    "Repository": {
+      "additionalProperties": false,
+      "description": "Read-only source of one application service, fetched at an exact revision.",
+      "properties": {
+        "allow_private_network": {
+          "default": false,
+          "description": "Permit a host that resolves to private or loopback addresses (self-hosted Git). Link-local and metadata addresses stay forbidden.",
+          "title": "Allow Private Network",
+          "type": "boolean"
+        },
+        "application": {
+          "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$",
+          "title": "Application",
+          "type": "string"
+        },
+        "contract": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkloadContract"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "credential": {
+          "anyOf": [
+            {
+              "pattern": "^(env:[A-Za-z_][A-Za-z0-9_]*|file:[^\\x00\\n]+)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Read-only token (https) or private key (ssh); one per repository.",
+          "title": "Credential"
+        },
+        "egress_rule_patterns": {
+          "description": "Operator-approved egress rule patterns scoped to this repository and its application service. IPv4 and IPv6 /0 networks are forbidden.",
+          "items": {
+            "$ref": "#/$defs/EgressRule"
+          },
+          "maxItems": 32,
+          "title": "Egress Rule Patterns",
+          "type": "array"
+        },
+        "host_key": {
+          "anyOf": [
+            {
+              "pattern": "^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ssh-rsa) [A-Za-z0-9+/]{20,800}={0,2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pinned SSH host key (required for ssh URLs).",
+          "title": "Host Key"
+        },
+        "id": {
+          "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$",
+          "title": "Id",
+          "type": "string"
+        },
+        "instruction": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional repository-specific goals for workload contract proposals. Treat this text as untrusted data subordinate to the operator's application instruction. It grants no authority to apply a proposal.",
+          "title": "Instruction"
+        },
+        "ref": {
+          "default": "refs/heads/main",
+          "pattern": "^refs/(heads|tags)/[A-Za-z0-9][A-Za-z0-9._/-]{0,120}$",
+          "title": "Ref",
+          "type": "string"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exact commit to build; fetching fails if the server cannot deliver it.",
+          "title": "Revision"
+        },
+        "service": {
+          "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$",
+          "title": "Service",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "pattern": "^(https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?|ssh://[a-z_][a-z0-9_-]{0,31}@[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?)/[A-Za-z0-9._~/-]{1,200}$",
+              "type": "string"
+            },
+            {
+              "pattern": "^[a-z_][a-z0-9_-]{0,31}@[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?:(/[A-Za-z0-9._-][A-Za-z0-9._~/-]{0,199}|~[A-Za-z0-9._~/-]{0,199}|[A-Za-z0-9._][A-Za-z0-9._~/-]{0,197})$",
+              "type": "string"
+            }
+          ],
+          "description": "SCP-style Git URLs are stored and shown as ssh:// URLs.",
+          "title": "Url"
+        }
+      },
+      "required": [
+        "id",
+        "application",
+        "service",
+        "url"
+      ],
+      "title": "Repository",
+      "type": "object"
+    },
+    "Resources": {
+      "additionalProperties": false,
+      "properties": {
+        "cpus": {
+          "default": 0.5,
+          "exclusiveMinimum": 0,
+          "maximum": 256,
+          "title": "Cpus",
+          "type": "number"
+        },
+        "log_burst": {
+          "default": 10000,
+          "description": "Max log lines per 30 s before journald drops.",
+          "maximum": 1000000,
+          "minimum": 100,
+          "title": "Log Burst",
+          "type": "integer"
+        },
+        "memory_mb": {
+          "default": 256,
+          "maximum": 1048576,
+          "minimum": 16,
+          "title": "Memory Mb",
+          "type": "integer"
+        },
+        "pids": {
+          "default": 128,
+          "maximum": 32768,
+          "minimum": 8,
+          "title": "Pids",
+          "type": "integer"
+        }
+      },
+      "title": "Resources",
+      "type": "object"
+    },
+    "Route": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "maxLength": 253,
+          "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$",
+          "title": "Host",
+          "type": "string"
+        },
+        "tls": {
+          "default": "acme",
+          "enum": [
+            "acme",
+            "internal"
+          ],
+          "title": "Tls",
+          "type": "string"
+        }
+      },
+      "required": [
+        "host"
+      ],
+      "title": "Route",
+      "type": "object"
+    },
+    "Scanning": {
+      "additionalProperties": false,
+      "properties": {
+        "context_max_requests": {
+          "default": 100,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Context Max Requests",
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "epss": {
+          "default": false,
+          "title": "Epss",
+          "type": "boolean"
+        },
+        "interval_s": {
+          "default": 21600,
+          "maximum": 86400,
+          "minimum": 300,
+          "title": "Interval S",
+          "type": "integer"
+        },
+        "kev": {
+          "default": false,
+          "title": "Kev",
+          "type": "boolean"
+        },
+        "max_age_s": {
+          "default": 86400,
+          "maximum": 604800,
+          "minimum": 300,
+          "title": "Max Age S",
+          "type": "integer"
+        },
+        "max_requests": {
+          "default": 1000,
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Max Requests",
+          "type": "integer"
+        },
+        "osv": {
+          "default": true,
+          "title": "Osv",
+          "type": "boolean"
+        },
+        "trivy": {
+          "default": true,
+          "title": "Trivy",
+          "type": "boolean"
+        }
+      },
+      "title": "Scanning",
+      "type": "object"
+    },
+    "SecretBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "ref": {
+          "pattern": "^(env:[A-Za-z_][A-Za-z0-9_]*|file:[^\\x00\\n]+)$",
+          "title": "Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "ref"
+      ],
+      "title": "SecretBinding",
+      "type": "object"
+    },
+    "Server": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$",
+          "title": "Host",
+          "type": "string"
+        },
+        "known_hosts_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Defaults to the controller user's ~/.ssh/known_hosts.",
+          "title": "Known Hosts File"
+        },
+        "name": {
+          "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$",
+          "title": "Name",
+          "type": "string"
+        },
+        "os_profile": {
+          "const": "ubuntu-26.04",
+          "default": "ubuntu-26.04",
+          "title": "Os Profile",
+          "type": "string"
+        },
+        "port": {
+          "default": 22,
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Port",
+          "type": "integer"
+        },
+        "user": {
+          "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
+          "title": "User",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "host",
+        "user"
+      ],
+      "title": "Server",
+      "type": "object"
+    },
+    "Service": {
+      "additionalProperties": false,
+      "description": "Prepared service contract; dependencies are local to its application.",
+      "properties": {
+        "bundle": {
+          "anyOf": [
+            {
+              "const": "sample-notes",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Mount an application shipped with the release read-only at /app.",
+          "title": "Bundle"
+        },
+        "command": {
+          "items": {
+            "pattern": "^[A-Za-z0-9@%+=:,./_-]{1,200}$",
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Command",
+          "type": "array"
+        },
+        "container_port": {
+          "default": 8080,
+          "maximum": 65535,
+          "minimum": 1024,
+          "title": "Container Port",
+          "type": "integer"
+        },
+        "data_path": {
+          "anyOf": [
+            {
+              "pattern": "^/[A-Za-z0-9._~/-]{0,200}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "/data",
+          "description": "Persistent data mount point.",
+          "title": "Data Path"
+        },
+        "depends_on": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Depends On",
+          "type": "array"
+        },
+        "deploy": {
+          "default": true,
+          "description": "false: stop the service, keep its data.",
+          "title": "Deploy",
+          "type": "boolean"
+        },
+        "egress": {
+          "$ref": "#/$defs/Egress",
+          "default": {
+            "mode": "none",
+            "rules": []
+          }
+        },
+        "health": {
+          "$ref": "#/$defs/Health",
+          "default": {
+            "interval_s": 30,
+            "max_response_ms": null,
+            "path": "/healthz",
+            "probe": null,
+            "retries": 3,
+            "timeout_s": 5
+          }
+        },
+        "host_port": {
+          "description": "Loopback port, proxy-only.",
+          "maximum": 29999,
+          "minimum": 20000,
+          "title": "Host Port",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[a-z][a-z0-9-]{1,30}[a-z0-9]$",
+          "title": "Id",
+          "type": "string"
+        },
+        "image": {
+          "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[a-f0-9]{64}$",
+          "title": "Image",
+          "type": "string"
+        },
+        "maintenance": {
+          "$ref": "#/$defs/Maintenance",
+          "default": {
+            "allow_backup_pause": false,
+            "allow_restart": true
+          }
+        },
+        "manage": {
+          "default": true,
+          "description": "false: skip this project entirely.",
+          "title": "Manage",
+          "type": "boolean"
+        },
+        "resources": {
+          "$ref": "#/$defs/Resources",
+          "default": {
+            "cpus": 0.5,
+            "log_burst": 10000,
+            "memory_mb": 256,
+            "pids": 128
+          }
+        },
+        "routes": {
+          "items": {
+            "$ref": "#/$defs/Route"
+          },
+          "maxItems": 8,
+          "title": "Routes",
+          "type": "array"
+        },
+        "run_as": {
+          "default": 10001,
+          "description": "UID/GID inside the container.",
+          "maximum": 60000,
+          "minimum": 1000,
+          "title": "Run As",
+          "type": "integer"
+        },
+        "secrets": {
+          "items": {
+            "$ref": "#/$defs/SecretBinding"
+          },
+          "maxItems": 32,
+          "title": "Secrets",
+          "type": "array"
+        },
+        "source_revision": {
+          "pattern": "^[A-Za-z0-9@:._/+-]{1,200}$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "update": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UpdatePolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Verified image update contract (unavailable until patch acceptance)."
+        }
+      },
+      "required": [
+        "id",
+        "image",
+        "source_revision",
+        "host_port"
+      ],
+      "title": "Service",
+      "type": "object"
+    },
+    "SshHardening": {
+      "additionalProperties": false,
+      "properties": {
+        "manage": {
+          "default": true,
+          "title": "Manage",
+          "type": "boolean"
+        },
+        "password_authentication": {
+          "default": false,
+          "title": "Password Authentication",
+          "type": "boolean"
+        },
+        "permit_root_login": {
+          "default": "prohibit-password",
+          "enum": [
+            "no",
+            "prohibit-password"
+          ],
+          "title": "Permit Root Login",
+          "type": "string"
+        }
+      },
+      "title": "SshHardening",
+      "type": "object"
+    },
+    "TrustedKey": {
+      "additionalProperties": false,
+      "description": "Public Ed25519 key (raw 32 bytes, base64). Public material, never a secret.",
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "public_key": {
+          "pattern": "^[A-Za-z0-9+/]{43}=$",
+          "title": "Public Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "public_key"
+      ],
+      "title": "TrustedKey",
+      "type": "object"
+    },
+    "UpdatePolicy": {
+      "additionalProperties": false,
+      "description": "Root-owned contract for operator-verified image updates (ADR 0002 sections 3, 5, 8).\n\nTrust anchors live here, never in the artifact being validated: the image\nattestation must be signed by one of `signers` (independent test/signing\nidentity) and the approval by one of `approvers`; the two sets must differ.",
+      "properties": {
+        "allowed_migrations": {
+          "description": "Data compatibility kinds an update may declare.",
+          "items": {
+            "enum": [
+              "none",
+              "reversible",
+              "restore_required"
+            ],
+            "type": "string"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Allowed Migrations",
+          "type": "array"
+        },
+        "apply_seconds": {
+          "default": 600,
+          "description": "Time the update needs; it must fit before window end.",
+          "maximum": 3600,
+          "minimum": 60,
+          "title": "Apply Seconds",
+          "type": "integer"
+        },
+        "approval_max_ttl_s": {
+          "default": 86400,
+          "maximum": 604800,
+          "minimum": 60,
+          "title": "Approval Max Ttl S",
+          "type": "integer"
+        },
+        "approvers": {
+          "items": {
+            "$ref": "#/$defs/TrustedKey"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Approvers",
+          "type": "array"
+        },
+        "backup_max_age_s": {
+          "default": 3600,
+          "maximum": 604800,
+          "minimum": 60,
+          "title": "Backup Max Age S",
+          "type": "integer"
+        },
+        "min_healthy_s": {
+          "anyOf": [
+            {
+              "maximum": 86400,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The patch controller updates a service only after this much continuous health (unset: 1800; 0: healthy now).",
+          "title": "Min Healthy S"
+        },
+        "repository": {
+          "description": "Expected image repository; candidates from elsewhere are refused.",
+          "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?(/[a-z0-9]+([._-][a-z0-9]+)*)+$",
+          "title": "Repository",
+          "type": "string"
+        },
+        "require_scan": {
+          "default": true,
+          "title": "Require Scan",
+          "type": "boolean"
+        },
+        "rollback_window_s": {
+          "anyOf": [
+            {
+              "maximum": 86400,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Window after apply in which the patch controller may roll back an update with migration `none` that became durably unhealthy (unset: 1800; 0: never).",
+          "title": "Rollback Window S"
+        },
+        "scan_max_age_s": {
+          "default": 86400,
+          "maximum": 604800,
+          "minimum": 300,
+          "title": "Scan Max Age S",
+          "type": "integer"
+        },
+        "signers": {
+          "items": {
+            "$ref": "#/$defs/TrustedKey"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Signers",
+          "type": "array"
+        },
+        "verify_timeout_s": {
+          "default": 120,
+          "maximum": 600,
+          "minimum": 10,
+          "title": "Verify Timeout S",
+          "type": "integer"
+        },
+        "versions": {
+          "$ref": "#/$defs/VersionRange"
+        }
+      },
+      "required": [
+        "repository",
+        "versions",
+        "signers",
+        "approvers"
+      ],
+      "title": "UpdatePolicy",
+      "type": "object"
+    },
+    "VersionRange": {
+      "additionalProperties": false,
+      "properties": {
+        "max": {
+          "pattern": "^[0-9]{1,6}(\\.[0-9]{1,6}){0,3}$",
+          "title": "Max",
+          "type": "string"
+        },
+        "min": {
+          "pattern": "^[0-9]{1,6}(\\.[0-9]{1,6}){0,3}$",
+          "title": "Min",
+          "type": "string"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "title": "VersionRange",
+      "type": "object"
+    },
+    "WorkloadContract": {
+      "additionalProperties": false,
+      "description": "Typed contract for one repository-built service (operator- or proposer-written).\n\nIt authorizes an isolated build only; it grants no host or executor capability.",
+      "properties": {
+        "backup": {
+          "$ref": "#/$defs/ContractBackup",
+          "default": {
+            "database": null,
+            "strategy": "none"
+          }
+        },
+        "build": {
+          "$ref": "#/$defs/ContractBuild",
+          "default": {
+            "context": ".",
+            "file": "Dockerfile",
+            "kind": "dockerfile",
+            "target": null
+          }
+        },
+        "container_port": {
+          "maximum": 65535,
+          "minimum": 1024,
+          "title": "Container Port",
+          "type": "integer"
+        },
+        "data_path": {
+          "anyOf": [
+            {
+              "pattern": "^/[A-Za-z0-9._~/-]{0,200}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Path"
+        },
+        "egress": {
+          "$ref": "#/$defs/Egress",
+          "default": {
+            "mode": "none",
+            "rules": []
+          }
+        },
+        "health": {
+          "$ref": "#/$defs/Health",
+          "default": {
+            "interval_s": 30,
+            "max_response_ms": null,
+            "path": "/healthz",
+            "probe": null,
+            "retries": 3,
+            "timeout_s": 5
+          }
+        },
+        "requirements": {
+          "$ref": "#/$defs/ContractRequirements",
+          "default": {
+            "add_capabilities": [],
+            "devices": [],
+            "engine_socket": false,
+            "host_network": false,
+            "privileged": false,
+            "production_secrets": [],
+            "read_only_rootfs": true
+          }
+        },
+        "resources": {
+          "$ref": "#/$defs/Resources",
+          "default": {
+            "cpus": 0.5,
+            "log_burst": 10000,
+            "memory_mb": 256,
+            "pids": 128
+          }
+        },
+        "run_as": {
+          "default": 10001,
+          "maximum": 60000,
+          "minimum": 1000,
+          "title": "Run As",
+          "type": "integer"
+        },
+        "update": {
+          "default": "pinned",
+          "enum": [
+            "pinned",
+            "patch"
+          ],
+          "title": "Update",
+          "type": "string"
+        }
+      },
+      "required": [
+        "container_port"
+      ],
+      "title": "WorkloadContract",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "admin": {
+      "$ref": "#/$defs/Admin"
+    },
+    "ai": {
+      "$ref": "#/$defs/Ai",
+      "default": {
+        "api_key_ref": null,
+        "base_url": null,
+        "budget": null,
+        "fx": null,
+        "local": null,
+        "local_only": true,
+        "model": null,
+        "model_policy": null,
+        "provider": "none",
+        "share": []
+      }
+    },
+    "applications": {
+      "items": {
+        "$ref": "#/$defs/Application"
+      },
+      "maxItems": 16,
+      "title": "Applications",
+      "type": "array"
+    },
+    "automation": {
+      "$ref": "#/$defs/Automation",
+      "default": {
+        "profile": "observe"
+      }
+    },
+    "backup": {
+      "$ref": "#/$defs/Backup",
+      "default": {
+        "auth_password_ref": null,
+        "ca_ref": null,
+        "enabled": false,
+        "endpoint": null,
+        "interval_s": 86400,
+        "max_mib": 256,
+        "password_ref": null,
+        "repository_ref": null,
+        "username_ref": null
+      }
+    },
+    "bot": {
+      "$ref": "#/$defs/Bot",
+      "default": {
+        "endpoints": [],
+        "port": 9090,
+        "public_hostname": null
+      }
+    },
+    "build": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BuildPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "channels": {
+      "items": {
+        "$ref": "#/$defs/Channel"
+      },
+      "maxItems": 16,
+      "title": "Channels",
+      "type": "array"
+    },
+    "events": {
+      "$ref": "#/$defs/Events",
+      "default": {
+        "max_events": 200000,
+        "retention_days": 30
+      }
+    },
+    "hardening": {
+      "$ref": "#/$defs/Hardening",
+      "default": {
+        "firewall": {
+          "manage": true
+        },
+        "journald": {
+          "retention_days": 30,
+          "system_max_use_mb": 500
+        },
+        "ssh": {
+          "manage": true,
+          "password_authentication": false,
+          "permit_root_login": "prohibit-password"
+        },
+        "unattended_security_upgrades": true
+      }
+    },
+    "maintenance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MaintenancePolicy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "profile": {
+      "default": "api",
+      "enum": [
+        "api",
+        "local-ai"
+      ],
+      "title": "Profile",
+      "type": "string"
+    },
+    "projects": {
+      "items": {
+        "$ref": "#/$defs/Project"
+      },
+      "maxItems": 64,
+      "title": "Projects",
+      "type": "array"
+    },
+    "proxy": {
+      "$ref": "#/$defs/Proxy",
+      "default": {
+        "acme_email": null,
+        "image": "docker.io/library/traefik@sha256:44b61e76a251fe586d17d881fc900452d0a7b4a4b08c97ce6eac86d45b4c8b9d",
+        "image_version": "v3.7.19",
+        "memory_mb": 192
+      }
+    },
+    "repositories": {
+      "items": {
+        "$ref": "#/$defs/Repository"
+      },
+      "maxItems": 64,
+      "title": "Repositories",
+      "type": "array"
+    },
+    "reserved_memory_mb": {
+      "default": 512,
+      "description": "Memory kept free for the base platform.",
+      "maximum": 65536,
+      "minimum": 128,
+      "title": "Reserved Memory Mb",
+      "type": "integer"
+    },
+    "scanning": {
+      "$ref": "#/$defs/Scanning",
+      "default": {
+        "context_max_requests": 100,
+        "enabled": false,
+        "epss": false,
+        "interval_s": 21600,
+        "kev": false,
+        "max_age_s": 86400,
+        "max_requests": 1000,
+        "osv": true,
+        "trivy": true
+      }
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "server": {
+      "$ref": "#/$defs/Server"
+    }
+  },
+  "required": [
+    "schema_version",
+    "server",
+    "admin"
+  ],
+  "title": "Config",
+  "type": "object"
+}

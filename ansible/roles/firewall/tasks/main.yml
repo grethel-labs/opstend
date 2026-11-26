@@ -1,0 +1,14 @@
+---
+- name: Manage firewall
+  when: steward_hardening.firewall.manage
+  block:
+    - name: Check the current SSH port
+      ansible.builtin.include_tasks: check-ssh-port.yml
+
+    - name: Configure verified firewall policy
+      ansible.builtin.include_tasks: configure.yml
+      when: not ansible_check_mode
+
+    - name: Preview verified firewall policy changes
+      ansible.builtin.include_tasks: preview.yml
+      when: ansible_check_mode

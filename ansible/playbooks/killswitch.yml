@@ -1,0 +1,18 @@
+---
+- name: Operate the kill switch
+  hosts: all
+  become: true
+  tasks:
+    - name: Validate requested state
+      ansible.builtin.assert:
+        that: steward_killswitch_state in ['on', 'off', 'status']
+
+    - name: Run steward-host killswitch
+      ansible.builtin.command:
+        argv: [/opt/steward/current/venv/bin/steward-host, killswitch, "{{ steward_killswitch_state }}"]
+      register: steward_killswitch
+      changed_when: steward_killswitch_state != 'status'
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ steward_killswitch.stdout }}"

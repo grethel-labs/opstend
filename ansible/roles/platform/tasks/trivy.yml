@@ -1,0 +1,32 @@
+---
+- name: Create root-owned scanner tool directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /var/cache/steward-tools
+    - "/opt/steward/tools/trivy-{{ steward_trivy_version }}"
+
+- name: Fetch pinned scanner archive with SHA256 verification
+  ansible.builtin.get_url:
+    url: "https://github.com/aquasecurity/trivy/releases/download/v{{ steward_trivy_version }}/{{ steward_trivy_archives[ansible_facts.architecture].file }}"
+    dest: "/var/cache/steward-tools/{{ steward_trivy_archives[ansible_facts.architecture].file }}"
+    checksum: "sha256:{{ steward_trivy_archives[ansible_facts.architecture].sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: not ansible_check_mode
+
+- name: Extract only the verified scanner executable without package scripts
+  ansible.builtin.unarchive:
+    src: "/var/cache/steward-tools/{{ steward_trivy_archives[ansible_facts.architecture].file }}"
+    dest: "/opt/steward/tools/trivy-{{ steward_trivy_version }}"
+    remote_src: true
+    include: [trivy]
+    owner: root
+    group: root
+    mode: "0755"
+  when: not ansible_check_mode

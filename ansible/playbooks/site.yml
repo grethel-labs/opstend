@@ -1,0 +1,470 @@
+---
+- name: Inspect site and admit guarded deployments
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    ansible_connection: ssh
+  pre_tasks:
+    - name: Require the generated inputs and native SSH for site admission
+      ansible.builtin.assert:
+        that:
+          - steward_generated | default(false)
+          - ansible_connection == 'ssh'
+        fail_msg: Run this playbook through ./steward using native SSH.
+
+    - name: Verify target ownership and prerequisites
+      ansible.builtin.import_role:
+        name: preflight
+      vars:
+        preflight_site: true
+
+    - name: Require an unchanged installed schema 1 inference candidate
+      ansible.builtin.assert:
+        that:
+          - preflight_install.schema_version | default(0) == 1
+          - preflight_install.state | default('') == 'installed'
+          - steward_private_application_deployment is undefined
+          - steward_resume_deployment is undefined
+          - steward_base_revision is defined
+          - steward_base_revision is match('^[0-9a-f]{64}\\Z')
+          - steward_base_revision == steward_config_revision
+          - steward_inference_candidate is mapping
+          - >-
+            steward_inference_candidate.keys() | sort ==
+            ((['advice'] if 'advice' in steward_inference_candidate else []) +
+             (['private_provider'] if 'private_provider' in steward_inference_candidate else ['manifest_sha256']) +
+             ['release', 'revision', 'version', 'wheel_sha256'])
+          - "'advice' not in steward_inference_candidate or steward_inference_candidate.advice is true"
+          - steward_inference_candidate.version is integer
+          - steward_inference_candidate.version == 1
+          - steward_inference_candidate.revision == steward_config_revision
+          - steward_inference_candidate.release == steward_release.version
+          - steward_inference_candidate.wheel_sha256 == steward_release.files[steward_release.wheel]
+          - steward_inference_candidate.wheel_sha256 is match('^[0-9a-f]{64}\\Z')
+          - >-
+            (steward_inference_candidate.private_provider is mapping and steward_ollama_local is undefined)
+            if 'private_provider' in steward_inference_candidate else steward_ollama_local is mapping
+          - >-
+            'private_provider' in steward_inference_candidate or
+            steward_inference_candidate.manifest_sha256 is match('^[0-9a-f]{64}\\Z')
+      when: steward_inference_candidate is defined
+
+    - name: Require an unchanged installed schema 1 repository fetch candidate
+      ansible.builtin.assert:
+        that:
+          - preflight_install.schema_version | default(0) == 1
+          - preflight_install.state | default('') == 'installed'
+          - steward_private_application_deployment is undefined
+          - steward_resume_deployment is undefined
+          - steward_inference_candidate is undefined
+          - steward_hardening.firewall.manage is true
+          - steward_base_revision is defined
+          - steward_base_revision is match('^[0-9a-f]{64}\\Z')
+          - steward_base_revision == steward_config_revision
+          - steward_repository_fetch is mapping
+          - steward_repository_fetch.keys() | sort == ['credential', 'manifest']
+          - steward_repository_fetch.manifest is mapping
+          - steward_repository_fetch.manifest.version is integer
+          - steward_repository_fetch.manifest.version == 1
+          - steward_repository_fetch.manifest.base_revision == steward_base_revision
+          - steward_repository_fetch.manifest.credential_required is boolean
+          - >-
+            (steward_repository_fetch.credential is none and
+             not steward_repository_fetch.manifest.credential_required) or
+            (steward_repository_fetch.manifest.credential_required and
+             steward_repository_fetch.credential is mapping and
+             steward_repository_fetch.credential.keys() | sort == ['kind', 'target'] and
+             steward_repository_fetch.credential.kind in ['env', 'file'] and
+             steward_repository_fetch.credential.target is string and
+             steward_repository_fetch.credential.target | length > 0)
+      no_log: true
+      when: steward_repository_fetch is defined
+
+    - name: Select a fresh unguarded deployment run
+      ansible.builtin.set_fact:
+        site_unguarded_run: "{{ lookup('ansible.builtin.password', '/dev/null', length=32, chars=['0123456789abcdef']) }}"
+      when:
+        - not preflight_guarded
+        - not ansible_check_mode
+        - steward_base_revision is defined
+
+    - name: Bind the inference deployment run ID
+      ansible.builtin.set_fact:
+        site_inference_run: "{{ site_unguarded_run }}"
+      when: steward_inference_candidate is defined and not ansible_check_mode
+
+    - name: Bind the unguarded deployment run marker
+      ansible.builtin.set_fact:
+        site_run_marker: >-
+          {{ {'base_revision': steward_base_revision, 'desired_revision': steward_config_revision}
+             | combine({run_field: site_unguarded_run}) }}
+      vars:
+        run_field: >-
+          {{ 'repository_fetch_run' if steward_repository_fetch is defined else
+             ('inference_run' if steward_inference_candidate is defined else 'site_run') }}
+      when:
+        - not preflight_guarded
+        - not ansible_check_mode
+        - steward_base_revision is defined
+
+    # An unguarded deployment holds no fence or lock across its run. This durable marker
+    # makes the executor's `config_apply` refuse (`target_busy`) from here until the last
+    # task. Serialize marker writes with candidate publication using the installed
+    # deployment lock. A baseline deployment can supersede an interrupted candidate.
+    - name: Mark the unguarded deployment run
+      ansible.builtin.command:
+        argv:
+          - /opt/steward/current/venv/bin/python
+          - -I
+          - -c
+          - |
+            import json
+            import os
+            import sys
+            from pathlib import Path
+            from steward.application_boot import deployment_lock, require, store
+
+            marker = Path('/etc/steward/config/deploy-run.json')
+            record = json.load(sys.stdin)
+            with deployment_lock(timeout=30):
+                if 'inference_run' in record or 'repository_fetch_run' in record:
+                    require(not os.path.lexists(marker), 'a site run is pending; finish a baseline deploy')
+                custody = Path('/var/lib/steward-repository-source-handoff')
+                authority = (
+                    marker.parent.parent / 'repository-fetch' / 'active.json',
+                    custody / 'ready',
+                    custody / '.staging' / 'incoming',
+                    custody / 'build-verify.json',
+                    custody / '.build-verify.incoming',
+                    marker.parent.parent / 'inference' / 'selection.json',
+                )
+                present = [path for path in authority if os.path.lexists(path)]
+                if (os.path.lexists(marker.parent.parent / 'repository-fetch' / 'active.json')
+                        or os.path.lexists(custody / 'ready')
+                        or os.path.lexists(custody / '.staging' / 'incoming')):
+                    from steward.core.repository_fetch_package import withdraw_active
+
+                    withdraw_active()
+                if os.path.lexists(marker.parent.parent / 'inference' / 'selection.json'):
+                    from steward.core.inference_deployment import revoke_for_desired
+
+                    revoke_for_desired(marker.with_name('desired.json'))
+                store(marker, record)
+                withdrawn = any(not os.path.lexists(path) for path in present)
+            if withdrawn:
+                print('withdrawn')
+        stdin: "{{ site_run_marker | to_json }}"
+      register: site_run_marker_install
+      changed_when: >-
+        (site_run_marker_install.rc | default(1)) == 0 and
+        'withdrawn' in (site_run_marker_install.stdout_lines | default([]))
+      when:
+        - not preflight_guarded
+        - not ansible_check_mode
+        - steward_base_revision is defined
+
+    - name: Withdraw managed repository fetch before any platform changes
+      ansible.builtin.include_role:
+        name: platform
+        tasks_from: repository-fetch.yml
+      vars:
+        platform_repository_fetch_phase: withdraw
+      when: not ansible_check_mode
+
+    - name: Withdraw managed inference before any platform changes
+      ansible.builtin.include_role:
+        name: platform
+        tasks_from: inference.yml
+      vars:
+        platform_inference_phase: withdraw
+      when: not ansible_check_mode
+
+    - name: Check the installed revision before changing an optional candidate
+      ansible.builtin.command:
+        argv:
+          - /opt/steward/current/venv/bin/python
+          - -I
+          - -m
+          - steward.executor.config_apply
+          - check-base
+          - --expected
+          - "{{ steward_base_revision }}"
+      changed_when: false
+      when:
+        - not ansible_check_mode
+        - steward_inference_candidate is defined or steward_repository_fetch is defined
+
+    - name: Require the controller's reviewed base revision
+      ansible.builtin.assert:
+        that:
+          - steward_base_revision is defined
+          - steward_base_revision is string
+          - steward_base_revision is match('^[0-9a-f]{64}\\Z')
+        fail_msg: Guarded deployment requires the revision from the controller's reviewed preflight.
+      when: preflight_guarded and not ansible_check_mode
+
+    - name: Require guarded recovery with the controller's reviewed observed revision
+      ansible.builtin.assert:
+        that:
+          - preflight_guarded
+          - steward_resume_deployment is string
+          - steward_resume_deployment is match('^[0-9a-f]{32}\\Z')
+          - steward_observed_revision is defined
+          - steward_observed_revision is string
+          - steward_observed_revision is match('^[0-9a-f]{64}\\Z')
+        fail_msg: Exact deployment recovery requires schema 2 and a reviewed root revision.
+      when: steward_resume_deployment is defined and not ansible_check_mode
+
+    - name: Read protected applied application IDs for fresh private admission
+      ansible.builtin.command:
+        argv:
+          - /opt/steward/current/venv/bin/python
+          - -I
+          - -c
+          - |
+            import json
+            from steward.application_boot import desired_configuration
+
+            print(json.dumps(sorted(app.id for app in desired_configuration().applications)))
+      register: site_base_applications
+      changed_when: false
+      when:
+        - preflight_guarded and preflight_private_application and not ansible_check_mode
+        - steward_resume_deployment is undefined
+
+    - name: Admit the protected site deployment
+      ansible.builtin.command:
+        argv: >-
+          {{ ['/opt/steward/current/venv/bin/python', '-I', '-m', 'steward.executor.site_deployment']
+             + [site_admission_action]
+             + (['--operation-id', steward_resume_deployment] if site_recovery else []) }}
+        stdin: >-
+          {{ site_request | combine(
+               {'observed_revision': steward_observed_revision} if site_recovery else
+               ({'retirement_protocol': 1} if site_removal else {})) | to_json }}
+      vars:
+        site_recovery: "{{ steward_resume_deployment is defined }}"
+        site_removal: >-
+          {{ preflight_private_application and not site_recovery and
+             (site_base_applications.stdout | from_json |
+              difference(steward_desired_config.applications | default([]) | map(attribute='id') | list) | length > 0) }}
+        site_admission_action: >-
+          {{ ('resume' if site_recovery else 'begin') + ('-private' if preflight_private_application else '') }}
+        site_request:
+          config: "{{ steward_desired_config }}"
+          release: "{{ site_release }}"
+          base_revision: "{{ steward_base_revision }}"
+        site_release:
+          version: "{{ steward_release.version }}"
+          files: "{{ steward_release.files }}"
+          wheel: "{{ steward_release.wheel }}"
+      changed_when: false
+      register: site_admission
+      no_log: true
+      when: preflight_guarded and not ansible_check_mode
+
+    - name: Read the protected admission receipt
+      ansible.builtin.set_fact:
+        site_admission_receipt: "{{ site_admission.stdout | from_json }}"
+      no_log: true
+      when: preflight_guarded and not ansible_check_mode
+
+    - name: Read the protected deployment credentials
+      ansible.builtin.set_fact:
+        site_identity: >-
+          {{ site_admission_receipt | dict2items | rejectattr('key', 'equalto', 'retirement_required') | items2dict }}
+      no_log: true
+      when: preflight_guarded and not ansible_check_mode
+
+- name: Deploy steward platform
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    site_guarded: "{{ preflight_guarded and not ansible_check_mode }}"
+    ansible_connection: "{{ 'steward_guarded_ssh' if site_guarded else 'ssh' }}"
+    ansible_steward_deployment_operation: "{{ site_identity.operation_id if site_guarded else none }}"
+    ansible_steward_deployment_run: "{{ site_identity.run_id if site_guarded else none }}"
+    ansible_steward_deployment_boot: "{{ site_identity.boot_id if site_guarded else none }}"
+    site_private_application: "{{ site_guarded and preflight_private_application }}"
+    site_application_boot_arguments:
+      - --deployment-operation-id
+      - "{{ site_identity.operation_id }}"
+      - --deployment-run-id
+      - "{{ site_identity.run_id }}"
+      - --deployment-boot-id
+      - "{{ site_identity.boot_id }}"
+      - --deployment-revision
+      - "{{ site_identity.desired_revision }}"
+  pre_tasks:
+    - name: Require the transport selected by protected host preflight
+      ansible.builtin.assert:
+        that:
+          - preflight_guarded is boolean
+          - site_guarded is boolean
+          - site_guarded == (preflight_guarded and not ansible_check_mode)
+          - ansible_connection == ('steward_guarded_ssh' if site_guarded else 'ssh')
+        fail_msg: Missing site preflight or unexpected site transport.
+
+    - name: Validate the protected deployment credentials
+      ansible.builtin.assert:
+        that:
+          - site_identity is mapping
+          - site_admission_receipt.retirement_required is undefined or (site_private_application and site_admission_receipt.retirement_required is true)
+          - site_identity.keys() | list | sort == ['boot_id', 'desired_revision', 'operation_id', 'run_id']
+          - site_identity.operation_id is string
+          - site_identity.operation_id is match('^[0-9a-f]{32}\\Z')
+          - steward_resume_deployment is undefined or site_identity.operation_id == steward_resume_deployment
+          - site_identity.run_id is string
+          - site_identity.run_id is match('^[0-9a-f]{32}\\Z')
+          - site_identity.boot_id is string
+          - site_identity.boot_id is match('^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}\\Z')
+          - site_identity.desired_revision is string
+          - site_identity.desired_revision == steward_config_revision
+          - ansible_steward_deployment_operation == site_identity.operation_id
+          - ansible_steward_deployment_run == site_identity.run_id
+          - ansible_steward_deployment_boot == site_identity.boot_id
+      no_log: true
+      when: site_guarded
+
+    - name: Report the admitted operation ID for exact recovery
+      ansible.builtin.debug:
+        msg: >-
+          Guarded deployment {{ site_identity.operation_id }} admitted.
+          Keep this operation ID and the original configuration and release for recovery.
+      when: site_guarded
+
+    - name: Archive and release applications before deployment cutover
+      ansible.builtin.command:
+        argv:
+          - /opt/steward/current/venv/bin/python
+          - -I
+          - -m
+          - steward.executor.site_deployment
+          - _retire
+          - "{{ site_identity.operation_id }}"
+          - "{{ site_identity.run_id }}"
+          - "{{ site_identity.boot_id }}"
+          - "{{ site_identity.desired_revision }}"
+      register: site_retirement
+      changed_when: site_retirement.rc == 0 and (site_retirement.stdout | from_json).changed
+      no_log: true
+      when: site_private_application and site_admission_receipt.retirement_required | default(false)
+
+    - name: Prepare private application boot transition
+      ansible.builtin.include_role:
+        name: identities
+        tasks_from: application-boot-inhibit.yml
+      when: not ansible_check_mode
+  roles:
+    - bootstrap
+    - base
+    - identities
+    - firewall
+    - platform
+    - proxy
+    - workloads
+    - verify
+
+- name: Complete the protected site deployment
+  hosts: all
+  gather_facts: false
+  become: true
+  vars:
+    ansible_connection: ssh
+  tasks:
+    - name: Finish the guarded deployment over native SSH
+      when: preflight_guarded and not ansible_check_mode
+      block:
+        - name: Require native SSH for completion
+          ansible.builtin.assert:
+            that: ansible_connection == 'ssh'
+
+        - name: Drain the guarded transport and complete host verification
+          ansible.builtin.command:
+            argv:
+              - /opt/steward/current/venv/bin/python
+              - -I
+              - -m
+              - steward.executor.site_deployment
+              - finish
+              - --operation-id
+              - "{{ site_identity.operation_id }}"
+              - --run-id
+              - "{{ site_identity.run_id }}"
+              - --boot-id
+              - "{{ site_identity.boot_id }}"
+          changed_when: false
+          register: site_finish
+          no_log: true
+
+        - name: Require the matching terminal deployment receipt
+          ansible.builtin.assert:
+            that: >-
+              (site_finish.stdout | from_json) == (site_identity | combine({'state': 'complete'}))
+          no_log: true
+
+    - name: Clear the unguarded deployment run marker
+      ansible.builtin.command:
+        argv:
+          - /opt/steward/current/venv/bin/python
+          - -I
+          - -c
+          - |
+            import json
+            import sys
+            from pathlib import Path
+            from steward.application_boot import deployment_lock, read_optional, require, sync_directory
+
+            marker = Path('/etc/steward/config/deploy-run.json')
+            record = json.load(sys.stdin)
+            with deployment_lock(timeout=30):
+                require(read_optional(marker) == record, 'site deployment was superseded')
+                marker.unlink()
+                sync_directory(marker.parent)
+        stdin: "{{ site_run_marker | to_json }}"
+      changed_when: false
+      when:
+        - not preflight_guarded
+        - not ansible_check_mode
+        - steward_base_revision is defined
+        - steward_inference_candidate is undefined
+        - steward_repository_fetch is undefined
+
+    - name: Require the staged repository fetch candidate from this verified site run
+      ansible.builtin.assert:
+        that:
+          - not preflight_guarded
+          - site_run_marker.repository_fetch_run == site_unguarded_run
+          - platform_repository_fetch_seal.rc == 0
+          - platform_repository_fetch_source.rc == 0
+          - verify_result.rc == 0
+      when: steward_repository_fetch is defined and not ansible_check_mode
+
+    - name: Publish the verified repository fetch candidate
+      ansible.builtin.command:
+        argv: [/opt/steward/current/venv/bin/python, -I, -m, steward.core.repository_fetch_package, publish]
+        stdin: "{{ {'manifest': steward_repository_fetch.manifest, 'marker': site_run_marker} | to_json }}"
+      changed_when: true
+      when:
+        - steward_repository_fetch is defined
+        - not ansible_check_mode
+
+    - name: Require the verified inference deployment from this run
+      ansible.builtin.assert:
+        that:
+          - not preflight_guarded
+          - site_inference_run is match('^[0-9a-f]{32}\\Z')
+          - platform_inference_payload.run_id == site_inference_run
+          - platform_inference_staged.rc == 0
+          - platform_inference_started is true
+          - verify_result.rc == 0
+      when: steward_inference_candidate is defined and not ansible_check_mode
+
+    - name: Publish the verified inference candidate
+      ansible.builtin.command:
+        argv: [/opt/steward/current/venv/bin/python, -I, -m, steward.core.inference_deployment, publish]
+        stdin: "{{ platform_inference_payload | to_json }}"
+      changed_when: true
+      when: steward_inference_candidate is defined and not ansible_check_mode

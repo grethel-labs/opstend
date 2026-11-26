@@ -1,0 +1,19 @@
+---
+- name: Install private application transition inspection
+  ansible.builtin.copy:
+    src: application-transition.py
+    dest: /var/lib/steward/application-transition.py
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Verify dropped bindings are stopped and new ports are unoccupied
+  ansible.builtin.command:
+    argv: >-
+      {{ ['/opt/steward/current/venv/bin/python', '-I', '/var/lib/steward/application-transition.py',
+          '--guarded-retirement'] if site_private_application | default(false)
+         else ['/usr/bin/python3', '/var/lib/steward/application-transition.py'] }}
+    stdin: "{{ {'applications': steward_applications | default([]), 'ids': steward_application_ids | default({})} | to_json }}"
+  register: identities_application_transition
+  changed_when: false
+  when: not ansible_check_mode

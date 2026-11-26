@@ -1,0 +1,11 @@
+{
+  "name": "steward-docs-diagrams",
+  "private": true,
+  "description": "Renders docs/diagrams/src/*.puml with excaliplant",
+  "scripts": {
+    "render": "./render.sh"
+  },
+  "devDependencies": {
+    "@grethel-labs/excaliplant": "1.5.1"
+  }
+}

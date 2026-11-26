@@ -1,0 +1,35 @@
+{
+  "profile": "resolute-amd64-sqlite-vfs-file",
+  "package": "podman",
+  "version": "5.7.0+ds2-3build1",
+  "architecture": "amd64",
+  "ubuntu_codename": "resolute",
+  "runtime": {"database": "sqlite", "storage": "vfs", "lock": "file"},
+  "archive": {
+    "url": "https://archive.ubuntu.com/ubuntu",
+    "inrelease": {
+      "path": "dists/resolute/InRelease",
+      "sha256": "45f95ce276cdba3e41870516a130e03c58b8b7a79e9546b0efe9e526d255740c",
+      "signing_key": "F6ECB3762474EDA9D21B7022871920D1991BC93C"
+    },
+    "sources": {
+      "path": "universe/source/Sources.xz",
+      "sha256": "9c732321580ae2824f7d8cb936e12cca435a60a252d0654b8cc2a0011dc82903"
+    },
+    "packages": {
+      "path": "universe/binary-amd64/Packages.xz",
+      "sha256": "1587be86d66d38542325215e0e109f75bd695c8f24d793ace2762038a6ad581e"
+    },
+    "source_directory": "pool/universe/p/podman",
+    "source_files": {
+      "podman_5.7.0+ds2-3build1.dsc": "97666c75a3a0906e6732395fc372616bada5e33bc0242b274f447d95037e8b19",
+      "podman_5.7.0+ds2-3build1.debian.tar.xz": "f325d6a23220aef8bec93eb023da4b166ce426feda68aa98a50964479358e6a4",
+      "podman_5.7.0+ds2.orig.tar.xz": "d5f4e3d2798d8dfa5caa24e3db878b3a0ee3d8748caf0b3c0fae2e7cda59bd79"
+    },
+    "binary_package": {
+      "path": "pool/universe/p/podman/podman_5.7.0+ds2-3build1_amd64.deb",
+      "sha256": "bc8fbe3c31f0904550a9e6cb32363643fd34ad9b78553fda233b50caef2e11bd",
+      "podman_sha256": "6627da0abfd3b0189498089319f5759c7b132bb6a51130bf8ff43d7f102d9673"
+    }
+  }
+}

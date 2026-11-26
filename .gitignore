@@ -1,0 +1,14 @@
+.steward/
+.venv/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+node_modules/
+webapp/dist/
+src/steward/api/static/
+config/
+*.retry
+webapp/test-results/
+webapp/playwright-report/

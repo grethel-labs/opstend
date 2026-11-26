@@ -1,0 +1,40 @@
+---
+- name: Check installed firewall helper metadata
+  ansible.builtin.stat:
+    path: /etc/steward/nftables/firewall-policy.py
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: firewall_helper
+
+- name: Preview firewall policy using the installed helper
+  vars:
+    firewall_inspected: "{{ firewall_preview.stdout | from_json }}"
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, /etc/steward/nftables/firewall-policy.py, inspect]
+  check_mode: false
+  register: firewall_preview
+  failed_when: false
+  changed_when: >-
+    firewall_preview.rc != 0
+    or (firewall_inspected.state | default('unknown')) != 'verified'
+    or (firewall_inspected.source | default(none)) != (steward_nftables | hash('sha256'))
+    or not (firewall_inspected.verified_runtime | default(none))
+    or (firewall_inspected.runtime | default(none)) != firewall_inspected.verified_runtime
+  when:
+    - firewall_helper.stat.isreg | default(false)
+    - firewall_helper.stat.uid == 0
+    - firewall_helper.stat.gid == 0
+    - firewall_helper.stat.mode == '0700'
+
+- name: Report firewall setup when no trusted helper is installed
+  ansible.builtin.debug:
+    msg: A firewall policy helper must be installed before its current policy can be confirmed.
+  changed_when: true
+  when: firewall_preview is skipped
+
+- name: Report unavailable firewall inspection
+  ansible.builtin.debug:
+    msg: The installed helper could not confirm the current firewall policy.
+  when: firewall_preview.rc | default(0) != 0

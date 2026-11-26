@@ -1,0 +1,70 @@
+@startuml
+title Steward auf einem Linux-Host – Dienste und Vertrauensgrenzen
+top to bottom direction
+skinparam shadowing false
+skinparam defaultTextAlignment center
+
+actor "Betreiber" as op
+cloud "Nutzer" as users
+cloud "HTTPS-Empfänger" as receiver
+cloud "Restic-Ziel\n(Backup-Kandidat)" as restic
+
+node "Controller-Rechner" as ctlm #LightYellow {
+  component "Steward CLI und Ansible\nvalidate · plan · deploy" as cli
+}
+
+node "Verwalteter Host" as srv #AliceBlue {
+  package "Netzkante" as edge #LightBlue {
+    component "nftables und Traefik" as proxy
+  }
+
+  package "Administration und Betrieb" as adm #Lavender {
+    component "Admin-API und Web-UI" as api
+    component "Deterministischer Controller" as ctl
+  }
+
+  package "Beobachtungen" as eyes #Honeydew {
+    component "Collector\nEreignisse und Abdeckung" as col
+    component "Scanner\nInventar und Befunde" as scan
+  }
+
+  package "Messaging (optional)" as msg #Honeydew {
+    component "Notifier\nDauerhafte Outbox" as ntf
+    component "Info-Bot\nSignierte Leseabfragen" as bot
+  }
+
+  package "Privilegierter Host-Zugriff" as hands #MistyRose {
+    component "Root-Executor\nRegistry, UID-Prüfung, Audit" as exe
+    component "Guarded Deploy\nSSH und Host-Sperre" as deploy
+  }
+
+  package "Getrennte Worker (Kandidaten)" as optional #Linen {
+    component "Inference-Worker\nScope, Budget, Schema" as ai
+    component "Restic-Worker\nVersiegelter Export" as bk
+  }
+
+  component "Rootless Podman / Quadlet\nVerwaltete Workloads" as app
+}
+
+op --> cli : YAML
+cli --> deploy : SSH mit geprüftem Host-Key
+deploy --> app : Root-eigene Artefakte
+op --> proxy : Admin-Tunnel (9443)
+users --> proxy : Öffentliche Routen bei Opt-in
+proxy --> api : Admin-Zugriff
+proxy --> bot : Bot-Routen
+proxy --> app : Workload-Routen
+api --> exe : Registrierte Aktionen
+ctl --> exe : Status und Abhilfe
+exe --> app : Gebundene Host-Aktionen
+col --> exe : Audit und Journal lesen
+scan --> exe : Inventar lesen
+col --> scan : Befunde lesen
+ntf --> col : Ereignisse lesen
+bot --> col : Begrenzte Abfragen
+ntf --> receiver : HTTPS
+api ..> ai : Beratung über Unix-Socket
+bot ..> ai : Autorisierte Beratung
+exe ..> bk : Export bereitstellen
+bk ..> restic : Upload und Prüfung
+@enduml

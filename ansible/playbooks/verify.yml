@@ -1,0 +1,6 @@
+---
+- name: Verify deployed platform
+  hosts: all
+  become: true
+  roles:
+    - verify

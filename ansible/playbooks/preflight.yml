@@ -1,0 +1,9 @@
+---
+# Read-only. Refuses unknown systems and foreign layouts before anything changes.
+- name: Preflight
+  hosts: all
+  become: true
+  tasks:
+    - name: Run preflight checks
+      ansible.builtin.import_role:
+        name: preflight
