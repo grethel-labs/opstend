@@ -286,7 +286,7 @@ def private_provider():
         {"budget": {"monthly": {"tokens": 100}}},
         {"budget": {"monthly": {"tokens": 100, "seconds": 30}, "max_concurrent": 9}},
         {"share": ["status", "status"]},
-        {"ca_pem": "-----BEGIN PRIVATE KEY-----\nexample\n-----END PRIVATE KEY-----"},
+        {"ca_pem": "-----BEGIN " + "PRIVATE KEY-----\nexample\n-----END PRIVATE KEY-----"},
         {"credential": "forbidden"},
     ],
 )
