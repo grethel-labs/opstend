@@ -123,7 +123,7 @@ AUTH_METHODS: dict[str, MethodSpec] = {
     # https://openai.com/policies/sign-in-with-chatgpt-terms/ describes separate plan usage rules.
     "chatgpt-subscription": _unavailable(
         "chatgpt-subscription",
-        "ChatGPT plan eligibility for Steward's unattended service is unconfirmed. "
+        "ChatGPT plan eligibility for OpsTend's unattended service is unconfirmed. "
         "Isolated Codex credential custody, remote validity, and authorized login and "
         "provider-side revoke are pending",
     ),
