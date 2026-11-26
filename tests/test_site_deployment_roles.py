@@ -1149,3 +1149,211 @@ def test_ordinary_schema_one_site_withdraws_repository_fetch(isolated_site):
     ]
     assert not active.exists()
     assert not (marker.parent / "config/deploy-run.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("authority", "mark", "failure", "marker_status", "locked_status"),
+    [
+        (None, True, "", "ok", "ok"),
+        ("active.json", True, "", "changed", "ok"),
+        ("ready", True, "", "changed", "ok"),
+        ("incoming", True, "", "changed", "ok"),
+        ("selection.json", True, "", "changed", "ok"),
+        ("active.json", False, "", None, "changed"),
+        ("build-verify.json", True, "", "ok", "changed"),
+        ("active.json", True, "withdrawal", "fatal", None),
+        ("active.json", False, "withdrawal", None, "fatal"),
+        (None, True, "superseded", "ok", "ok"),
+    ],
+)
+def test_unguarded_withdrawal_reports_durable_authority_removal(
+    tmp_path, authority, mark, failure, marker_status, locked_status
+):
+    pytest.importorskip("ansible")
+    marker = tmp_path / "etc/steward/config/deploy-run.json"
+    marker.parent.mkdir(parents=True)
+    active = marker.parent.parent / "repository-fetch/active.json"
+    selection = marker.parent.parent / "inference/selection.json"
+    custody = tmp_path / "var/lib/steward-repository-source-handoff"
+    repository_authority = [
+        active,
+        custody / "ready",
+        custody / ".staging/incoming",
+        custody / "build-verify.json",
+        custody / ".build-verify.incoming",
+    ]
+    for path in [*repository_authority, selection]:
+        if path.name == authority:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+
+    # Run the command bodies unchanged apart from redirecting fixed paths and imports.
+    package = tmp_path / "steward"
+    core = package / "core"
+    core.mkdir(parents=True)
+    for directory in (package, core):
+        (directory / "__init__.py").touch()
+    (package / "application_boot.py").write_text(
+        "import json, os\n"
+        "from contextlib import contextmanager\n"
+        "locked = False\n"
+        "@contextmanager\n"
+        "def deployment_lock(*, timeout):\n"
+        "    global locked\n"
+        "    assert timeout == 30 and not locked\n"
+        "    locked = True\n"
+        "    try:\n"
+        "        yield\n"
+        "    finally:\n"
+        "        locked = False\n"
+        "def require(condition, message):\n"
+        "    assert locked\n"
+        "    if not condition:\n"
+        "        raise RuntimeError(message)\n"
+        "def sync_directory(path):\n"
+        "    assert locked\n"
+        "    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)\n"
+        "    try:\n"
+        "        os.fsync(fd)\n"
+        "    finally:\n"
+        "        os.close(fd)\n"
+        "def store(path, record):\n"
+        "    assert locked\n"
+        "    if record.get('site_run') and " + repr(failure == "superseded") + ":\n"
+        "        record = dict(record, site_run='superseding run')\n"
+        "    path.write_text(json.dumps(record))\n"
+        "    sync_directory(path.parent)\n"
+        "def read_optional(path):\n"
+        "    assert locked\n"
+        "    return json.loads(path.read_text()) if path.exists() else None\n"
+        "def remove(paths):\n"
+        "    assert locked\n"
+        "    for path in paths:\n"
+        "        if path.exists():\n"
+        "            path.unlink()\n"
+        "            sync_directory(path.parent)\n"
+    )
+    (core / "repository_fetch_package.py").write_text(
+        "from pathlib import Path\n"
+        "from steward import application_boot as boot\n"
+        "def withdraw_active():\n"
+        f"    if {failure == 'withdrawal'!r}:\n"
+        "        raise RuntimeError('withdrawal failed')\n"
+        f"    boot.remove(map(Path, {[str(path) for path in repository_authority]!r}))\n"
+    )
+    (core / "inference_deployment.py").write_text(
+        "from pathlib import Path\n"
+        "from steward import application_boot as boot\n"
+        "def revoke_for_desired(path):\n"
+        f"    assert path == Path({str(marker.with_name('desired.json'))!r})\n"
+        f"    boot.remove([Path({str(selection)!r})])\n"
+    )
+
+    site = yaml.safe_load((ANSIBLE / "playbooks/site.yml").read_text())
+    repository = yaml.safe_load((ANSIBLE / "roles/platform/tasks/repository-fetch.yml").read_text())
+    mark_name = "Mark the unguarded deployment run"
+    clear_name = "Clear the unguarded deployment run marker"
+    detect_name = "Detect installed or interrupted source handoff"
+    locked_name = "Revoke ready source and withdraw the active manifest under the deployment lock"
+    site_tasks = {
+        task.get("name"): task
+        for play in site
+        for section in ("pre_tasks", "tasks", "post_tasks")
+        for task in play.get(section, [])
+    }
+    repository_tasks = {task["name"]: task for task in repository[0]["block"]}
+    tasks = [
+        *([site_tasks[mark_name]] if mark else []),
+        repository_tasks[detect_name],
+        repository_tasks[locked_name],
+        *([site_tasks[clear_name]] if mark else []),
+    ]
+    for task in tasks:
+        if "ansible.builtin.command" in task:
+            argv = task["ansible.builtin.command"]["argv"]
+            assert argv[1:3] == ["-I", "-c"]
+            argv[0] = sys.executable
+            script = (
+                argv[3]
+                .replace("/etc/steward", f"{tmp_path}/etc/steward")
+                .replace("/var/lib/steward-repository-source-handoff", str(custody))
+            )
+            argv[3] = (
+                f"import sys\nsys.dont_write_bytecode = True\n"
+                f"sys.path.insert(0, {str(tmp_path)!r})\n" + script
+            )
+
+    def stat_results(*present):
+        return {"results": [{"stat": {"exists": exists}} for exists in present]}
+
+    playbook = tmp_path / "report.yml"
+    playbook.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "hosts": "localhost",
+                    "connection": "local",
+                    "gather_facts": False,
+                    "vars": {
+                        "ansible_python_interpreter": sys.executable,
+                        "ansible_remote_tmp": str(tmp_path / "remote-tmp"),
+                        "preflight_guarded": False,
+                        "steward_base_revision": REVISION,
+                        "site_run_marker": {
+                            "base_revision": REVISION,
+                            "desired_revision": REVISION,
+                            "site_run": "e" * 32,
+                        },
+                        # An installed source-handoff fragment keeps the later task eligible.
+                        "platform_repository_fetch_fragments": stat_results(False, True, False),
+                        "platform_repository_fetch_paths": stat_results(*([False] * 10)),
+                    },
+                    "tasks": tasks,
+                }
+            ]
+        )
+    )
+    env = {key: value for key, value in os.environ.items() if not key.startswith("ANSIBLE_")}
+    env.update(
+        ANSIBLE_CONFIG=str(ANSIBLE / "ansible.cfg"),
+        ANSIBLE_LOCAL_TEMP=str(tmp_path / "local-tmp"),
+        ANSIBLE_NOCOLOR="1",
+    )
+    result = subprocess.run(
+        [
+            str(Path(sys.executable).with_name("ansible-playbook")),
+            "-i",
+            "localhost,",
+            str(playbook),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        check=False,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == (2 if failure else 0), output
+    if not failure:
+        expected_changed = [marker_status, locked_status].count("changed")
+        assert f"changed={expected_changed} " in output.rsplit("PLAY RECAP", 1)[-1], output
+    clear_status = {"": "ok", "superseded": "fatal"}.get(failure) if mark else None
+    for name, status in [
+        (mark_name, marker_status),
+        (locked_name, locked_status),
+        (clear_name, clear_status),
+    ]:
+        if status is None:
+            assert f"TASK [{name}]" not in output, output
+        else:
+            assert (
+                f"{status}: [localhost]"
+                in output.split(f"TASK [{name}]", 1)[1].split("\nTASK [", 1)[0]
+            ), output
+    assert active.exists() == (failure == "withdrawal")
+    assert not any(path.exists() for path in [*repository_authority[1:], selection])
+    assert marker.exists() == (failure == "superseded")
+    if failure == "withdrawal":
+        assert "withdrawal failed" in output
+    if failure == "superseded":
+        assert "site deployment was superseded" in output

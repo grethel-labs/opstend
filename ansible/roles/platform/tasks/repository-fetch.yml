@@ -135,12 +135,29 @@
           - -I
           - -c
           - |
+            import os
+            from pathlib import Path
             from steward.application_boot import deployment_lock
             from steward.core.repository_fetch_package import withdraw_active
 
+            custody = Path('/var/lib/steward-repository-source-handoff')
+            authority = (
+                Path('/etc/steward/repository-fetch/active.json'),
+                custody / 'ready',
+                custody / '.staging' / 'incoming',
+                custody / 'build-verify.json',
+                custody / '.build-verify.incoming',
+            )
             with deployment_lock(timeout=30):
+                present = [path for path in authority if os.path.lexists(path)]
                 withdraw_active()
-      changed_when: true
+                withdrawn = any(not os.path.lexists(path) for path in present)
+            if withdrawn:
+                print('withdrawn')
+      register: platform_repository_fetch_withdrawal
+      changed_when: >-
+        (platform_repository_fetch_withdrawal.rc | default(1)) == 0 and
+        'withdrawn' in (platform_repository_fetch_withdrawal.stdout_lines | default([]))
       when: platform_repository_handoff_needs_withdrawal
 
     - name: Withdraw the active repository fetch manifest

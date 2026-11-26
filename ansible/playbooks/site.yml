@@ -131,6 +131,15 @@
                 if 'inference_run' in record or 'repository_fetch_run' in record:
                     require(not os.path.lexists(marker), 'a site run is pending; finish a baseline deploy')
                 custody = Path('/var/lib/steward-repository-source-handoff')
+                authority = (
+                    marker.parent.parent / 'repository-fetch' / 'active.json',
+                    custody / 'ready',
+                    custody / '.staging' / 'incoming',
+                    custody / 'build-verify.json',
+                    custody / '.build-verify.incoming',
+                    marker.parent.parent / 'inference' / 'selection.json',
+                )
+                present = [path for path in authority if os.path.lexists(path)]
                 if (os.path.lexists(marker.parent.parent / 'repository-fetch' / 'active.json')
                         or os.path.lexists(custody / 'ready')
                         or os.path.lexists(custody / '.staging' / 'incoming')):
@@ -142,8 +151,14 @@
 
                     revoke_for_desired(marker.with_name('desired.json'))
                 store(marker, record)
+                withdrawn = any(not os.path.lexists(path) for path in present)
+            if withdrawn:
+                print('withdrawn')
         stdin: "{{ site_run_marker | to_json }}"
-      changed_when: true
+      register: site_run_marker_install
+      changed_when: >-
+        (site_run_marker_install.rc | default(1)) == 0 and
+        'withdrawn' in (site_run_marker_install.stdout_lines | default([]))
       when:
         - not preflight_guarded
         - not ansible_check_mode
@@ -409,7 +424,7 @@
                 marker.unlink()
                 sync_directory(marker.parent)
         stdin: "{{ site_run_marker | to_json }}"
-      changed_when: true
+      changed_when: false
       when:
         - not preflight_guarded
         - not ansible_check_mode
