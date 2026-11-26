@@ -102,21 +102,41 @@ reboot, and the wrong-key, unsigned and tampered archive refusals.
 
 The release build is a single manually dispatched job with no inputs. Run it
 on the protected default branch of `grethel-labs/server-deploy-toolkit`.
-Before the first run, a repository administrator must protect the actual
-default branch with required pull requests and CODEOWNERS review, and forbid
-direct pushes, force pushes and bypasses. Add confirmed public owners with
-repository write access before enabling the CODEOWNERS requirement. Submit CI and policy changes
-separately for the review required by [CONTRIBUTING.md](../CONTRIBUTING.md).
+Protect the actual default branch with required pull requests and strict
+required GitHub Actions checks named `python`, `ansible`, and `webapp`. Each
+check must succeed and the PR branch must be up to date before merge. Forbid
+direct pushes, force pushes, and all bypasses, including for administrators.
+
+Only a sole-maintainer repository may use zero required PR approvals. In
+that case, disable required CODEOWNERS review and last-push approval in the
+branch rules. With multiple maintainers, require an independent PR approval
+and CODEOWNERS approval on owned paths. Keep the separate internal review for
+CI and policy changes required by [CONTRIBUTING.md](../CONTRIBUTING.md). That
+review does not require a separate GitHub account.
 
 Pre-create the `steward-release-build` environment before dispatch. GitHub can
-auto-create a missing environment without protection rules. Set the sole
-allowed ref to the exact default branch as a **Branch** rule. Allow no tags.
-Set a required reviewer, enable **Prevent self-review**, disable administrator
-bypass and leave the environment free of secrets. Update branch protection
-and the environment rule if the default branch changes. Required reviewer
-availability depends on repository visibility and GitHub plan. Use this
-handoff only where that approval can be enforced. See
+auto-create a missing environment without protection rules. Use the literal
+default branch name as the sole **Branch** rule. Allow no tags, configure no
+environment secrets, and disable administrator bypass. For a sole maintainer,
+set the owner as the sole required reviewer and turn off **Prevent self-review**.
+The owner can dispatch and approve their own job and must explicitly approve
+that unsigned build once. With multiple maintainers, configure required
+reviewers and turn on **Prevent self-review** so someone other than the
+dispatcher must approve. Reviewer availability depends on repository
+visibility and GitHub plan. See
 [GitHub environment setup](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments).
+
+Before dispatch, verify these settings and record the merged default-branch
+SHA after all three CI checks succeed on it. If the default branch changes,
+align branch protection, the environment rule, and the
+`.github/workflows/ci.yml` push trigger, which currently names `main`.
+Stop before dispatch if any required setting or reviewer gate is unavailable
+or ineffective, or if any check lacks a successful result for that SHA.
+
+Approve only while the run is waiting for the `steward-release-build`
+review and its source SHA matches the SHA you recorded. If the SHA differs,
+the required review is absent, or any protection is ineffective, cancel the
+run and discard any artifact it produced.
 
 The job uses `deployment: false` to avoid creating a deployment object.
 Required reviewers still apply. Custom deployment protection apps are
