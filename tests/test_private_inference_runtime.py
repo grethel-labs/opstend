@@ -1,4 +1,8 @@
-"""Live A04 acceptance using STEWARD_TEST_PRIVATE_INFERENCE=1 and the LAB_AI inputs."""
+"""Live A04 acceptance using STEWARD_TEST_PRIVATE_INFERENCE=1 and the LAB_AI inputs.
+
+Warm the first listed model before running the test if loading it can exceed
+the worker's per-request inference deadline.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +14,7 @@ import socket
 import socketserver
 import time
 from contextlib import ExitStack, suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from itertools import count
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -36,7 +40,9 @@ from test_ai_admin_ipc import serving
 from test_api import settings
 
 WINDOW = "Sun 03:00 UTC"
-NOW = datetime(2026, 11, 29, 3, 1, tzinfo=UTC).timestamp()
+WINDOW_START = datetime(2026, 11, 22, 3, 1, tzinfo=UTC)
+NOW = WINDOW_START.timestamp()
+NEXT_WINDOW = (WINDOW_START + timedelta(weeks=1)).timestamp()
 
 
 class RelayHandler(socketserver.BaseRequestHandler):
@@ -148,13 +154,14 @@ def run_lab(tmp_path, monkeypatch, endpoint, ca_pem, api_key):
     monkeypatch.setattr(worker, "_trusted_directory", lambda path: path == tmp_path)
     uid = os.geteuid()
     sequence = count()
+    now = NOW
 
     def tick():
         result = worker.run_once(
             read_policy=worker._read_candidate,
             state_dir=base,
             kill_switch=worker.read_kill_switch,
-            clock=lambda: NOW,
+            clock=lambda: now,
             candidate_policy=worker._read_candidate(),
         )
         require(result["status"] == "ok", "Private worker tick failed")
@@ -171,7 +178,7 @@ def run_lab(tmp_path, monkeypatch, endpoint, ca_pem, api_key):
             state_dir=base,
             admin_uid=uid,
             read_policy=worker._read_candidate,
-            clock=lambda: NOW,
+            clock=lambda: now,
             candidate=True,
         )
         stack.enter_context(serving(admin))
@@ -312,32 +319,17 @@ def run_lab(tmp_path, monkeypatch, endpoint, ca_pem, api_key):
         )
         require(view()["active"] == incumbent, "Best-now changed the incumbent")
 
-        # An explicit operator pin can select another model served by the same endpoint.
-        require(len(models) > 1, "A second real model is required to exercise the change report")
-        other = next(candidate for candidate in models if candidate != model)
-        post("pin", {"model": other})
-        tick()
-        changed = view()
-        require(changed["active"]["model"] == other, "Operator pin did not change the model")
-        require(
-            changed["report"]["reason"] == "selection_change"
-            and changed["report"]["body"]["model"] == other
-            and changed["report"]["body"]["tokens"] > 0,
-            "Model change did not produce a measured report",
-        )
-        # Use the original model for advice so evaluation of the alternate
-        # remains independent of the alternate's advisory quality.
-        post("pin", {"model": model})
-        before_eval = usage(base, "private-evaluation.db", evaluation, NOW)
         require(
             usage(base, "private-ledger.db", runtime, NOW)["tokens"] == 0,
             "A model evaluation spent from the advice ledger",
         )
 
+        # Ask while the incumbent from best-now is still loaded. Switching to
+        # the alternate and back would also exercise the serving cold start.
         before = view()
         response = browser.post(
             "/api/advice",
-            json={"question": "Summarize the available status evidence and its gaps."},
+            json={"question": "What is the kill switch state?"},
         )
         answer = unpack(response, 200, "read-only advice")
         recognized = next(
@@ -355,14 +347,43 @@ def run_lab(tmp_path, monkeypatch, endpoint, ca_pem, api_key):
             ),
             "Advice lacked source, time, or missing-data coverage",
         )
+        advice_usage = usage(base, "private-ledger.db", runtime, NOW)
+        require(advice_usage["tokens"] > 0, "Advice usage missing")
         require(
-            usage(base, "private-ledger.db", runtime, NOW)["tokens"] > 0, "Advice usage missing"
-        )
-        require(
-            usage(base, "private-evaluation.db", evaluation, NOW) == before_eval,
+            usage(base, "private-evaluation.db", evaluation, NOW) == measured,
             "Advice spent from the evaluation ledger",
         )
         require(view() == before, "Advice changed the provider or selection state")
+
+        now = NEXT_WINDOW
+        weekly = tick()["weekly"]
+        require(
+            weekly == {"status": "kept", "reason": "comparison_sources_unavailable"},
+            "Automatic evaluation did not run and keep the incumbent in the next window",
+        )
+        require(view()["active"] == incumbent, "Automatic evaluation changed the incumbent")
+        require(
+            usage(base, "private-evaluation.db", evaluation, NOW)["tokens"] > measured["tokens"],
+            "Automatic evaluation did not record live usage",
+        )
+
+        # An explicit operator pin can select another model served by the same endpoint.
+        require(len(models) > 1, "A second real model is required to exercise the change report")
+        other = next(candidate for candidate in models if candidate != model)
+        post("pin", {"model": other})
+        tick()
+        changed = view()
+        require(changed["active"]["model"] == other, "Operator pin did not change the model")
+        require(
+            changed["report"]["reason"] == "selection_change"
+            and changed["report"]["body"]["model"] == other
+            and changed["report"]["body"]["tokens"] > 0,
+            "Model change did not produce a measured report",
+        )
+        require(
+            usage(base, "private-ledger.db", runtime, NOW) == advice_usage,
+            "The model change evaluation spent from the advice ledger",
+        )
         require(
             api_key not in json.dumps(app.state.audit.read()), "API audit exposed the credential"
         )
