@@ -1,0 +1,6 @@
+---
+- name: Verify exact live firewall source and application socket UID bindings
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, /var/lib/steward/application-firewall.py]
+    stdin: "{{ {'source': steward_nftables | hash('sha256'), 'dispatch': workload_application_dispatch} | to_json }}"
+  changed_when: false

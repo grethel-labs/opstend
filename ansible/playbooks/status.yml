@@ -1,0 +1,21 @@
+---
+- name: Read verified platform status
+  hosts: all
+  become: true
+  tasks:
+    - name: Query the host executor
+      ansible.builtin.command:
+        argv: [/opt/steward/current/venv/bin/steward-host, status]
+      register: steward_status
+      changed_when: false
+      check_mode: false
+
+    - name: Store status on the controller
+      ansible.builtin.copy:
+        content: "{{ steward_status.stdout }}"
+        dest: "{{ steward_local_dir }}/status.json"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false

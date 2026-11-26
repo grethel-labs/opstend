@@ -1,0 +1,24 @@
+@startfiles
+title Auf dem Server: wem gehört was
+/etc/steward/
+/etc/steward/install.json
+/etc/steward/config/desired.json
+/etc/steward/executor.json
+/etc/steward/nftables/steward.nft
+/etc/steward/proxy/
+/etc/steward/secrets/
+/etc/steward/killswitch
+/etc/containers/systemd/users/<UID>/
+/opt/steward/releases/<version>/
+/opt/steward/current
+/srv/steward/projects/<id>/data/
+/srv/steward/archive/<id>/
+/var/lib/steward-api/
+/var/lib/steward-controller/
+/var/lib/steward-collector/
+/var/lib/steward-notifier/
+/var/lib/steward-bot/
+/var/lib/steward-executor/
+/run/steward-executor/executor.sock
+/run/steward-collector/query.sock
+@endfiles

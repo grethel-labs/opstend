@@ -1,0 +1,59 @@
+# Server Deploy Toolkit - example configuration, entry profile "api".
+# Copy to config/server.yml (config/ is ignored by git) and adjust.
+schema_version: 1
+
+server:
+  name: my-server          # must equal --limit
+  host: 203.0.113.10       # address or DNS name; its host key must already be trusted
+  port: 22
+  user: deploy             # existing user with SSH key login and sudo
+  os_profile: ubuntu-26.04
+
+# "api" uses external AI providers once they are configured (stage 4).
+# The platform itself runs completely without AI.
+profile: api
+
+# observe: detect and report. Updates and code repairs are never automatic in this
+# profile. Restarting failed or hung services still happens (see maintenance).
+automation:
+  profile: observe
+
+admin:
+  access: private          # reachable only through an SSH tunnel or VPN
+  hostname: localhost
+  port: 9443
+  # Create with: ./steward secrets init-admin-token --config config/server.yml
+  token_ref: file:~/.config/steward/my-server/admin_token
+
+hardening:
+  ssh:
+    manage: true
+    password_authentication: false
+    permit_root_login: prohibit-password
+  firewall:
+    manage: true
+  unattended_security_upgrades: true
+
+projects:
+  # Bundled sample application: notes service with SQLite state and health check.
+  - id: notes
+    image: docker.io/library/python@sha256:5862d971d1f0ae26b258cefa4e893556b1d3aba81bd2ff30888704ad378bab67
+    source_revision: bundled:sample-notes@0.1.1
+    bundle: sample-notes
+    command: [python, /app/app.py]
+    container_port: 8080
+    host_port: 20080
+    # No route: the service is not exposed. To publish it, set proxy.acme_email
+    # and add:  routes: [{host: notes.example.org, tls: acme}]
+    egress:
+      mode: none           # the service may not open outbound connections
+    health:
+      path: /healthz
+    resources:
+      memory_mb: 128
+      cpus: 0.5
+      pids: 64
+    maintenance:
+      # Default. The controller restarts this service when it is down or keeps
+      # failing its health check (budgeted, audited). Set false to exempt it.
+      allow_restart: true

@@ -1,0 +1,31 @@
+---
+- name: Observe the application's source, generated state, and drop-ins
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - --user
+      - show
+      - --all
+      - --property=LoadState
+      - --property=UnitFileState
+      - --property=SourcePath
+      - --property=DropInPaths
+      - "{{ application_unit.unit }}"
+  become: true
+  become_user: "{{ application_unit.user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ steward_uids[application_unit.user] }}"
+  register: workload_application_authority
+  changed_when: false
+  failed_when: >-
+    not (
+      (application_allow_missing_unit | default(false) and
+       'LoadState=not-found' in workload_application_authority.stdout_lines)
+      or
+      (workload_application_authority.rc == 0 and
+       'LoadState=loaded' in workload_application_authority.stdout_lines and
+       'UnitFileState=generated' in workload_application_authority.stdout_lines and
+       'DropInPaths=' in workload_application_authority.stdout_lines and
+       ('SourcePath=/etc/containers/systemd/users/' ~ steward_uids[application_unit.user] ~
+         '/' ~ application_unit.filename) in workload_application_authority.stdout_lines)
+    )

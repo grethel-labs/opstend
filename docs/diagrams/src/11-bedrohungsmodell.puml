@@ -1,0 +1,26 @@
+@startmindmap
+title Bedrohungsmodell nach Schutzgut (T1–T22)
+* Steward
+** Host-Kontrolle
+*** T3 API-Kompromittierung\nExecutor prüft Rolle + Policy selbst
+*** T13 Aussperrung\nRollback-Timer 180 s
+*** T15/T16 falsches Ziel / fremdes System\nPreflight, Install-Marker
+*** T18 Plattform-Ausfall\nKill-Switch, Firewall ohne Dienste
+** Daten und Secrets
+*** T1 Workload greift Host an\nUser, Seccomp, nftables
+*** T2 Workload ändert Unit/Image\nroot-eigene Quadlets
+*** T14 Secrets in Git/Logs\nnur Referenzen, Redaktion
+*** T19 Secrets im Log\nRedaktion vor Verlassen von Root
+** Integrität
+*** T6 Config-Injection\nstrenges Schema
+*** T7/T8 Replay, Nebenläufigkeit\nExpiry, Locks
+*** T11/T12 Audit/Registry manipuliert\nHash-Kette, Root-Besitz
+*** T17 Lieferkette\nHash-Locks, Digest-Pinning
+** Verfügbarkeit
+*** T4/T5 Session, Brute Force, schwaches Token\nfail closed
+*** T9 Endlos-Reparatur\nCooldown + Stundenbudget
+*** T21 Flut\nCaps, Retention
+** Automatisierung
+*** T10/T20 Prompt Injection\nLogs lösen nichts aus
+*** T22 Collector fälscht Events\nAudit-Ketten unabhängig
+@endmindmap

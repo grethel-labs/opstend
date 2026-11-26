@@ -1,0 +1,40 @@
+---
+- name: Install application firewall verification helper
+  ansible.builtin.copy:
+    src: application-firewall.py
+    dest: /var/lib/steward/application-firewall.py
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Initialize the application firewall dispatch
+  ansible.builtin.set_fact:
+    workload_application_dispatch: {}
+
+- name: Resolve application UIDs to their expected firewall chains
+  ansible.builtin.set_fact:
+    workload_application_dispatch: "{{ workload_application_dispatch | combine({steward_uids[item.user]: item.chain}) }}"
+  loop: "{{ steward_application_egress }}"
+
+- name: Require the verified policy before starting application user managers
+  ansible.builtin.include_tasks: application-firewall.yml
+
+- name: Record owned units before any application can run
+  ansible.builtin.copy:
+    dest: /var/lib/steward/application-units.json
+    content: "{{ identities_application_transition.stdout }}
+"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Protect active application user managers with firewall ordering
+  ansible.builtin.include_tasks: application-boot-managers.yml
+  when: identities_application_active_users | default([]) | length > 0
+
+- name: Reconcile private applications
+  ansible.builtin.include_tasks: application.yml
+  loop: "{{ steward_applications | rejectattr('services', 'equalto', []) | list }}"
+  loop_control:
+    loop_var: application
+    label: "{{ application.id }}"

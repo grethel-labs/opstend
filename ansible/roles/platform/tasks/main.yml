@@ -1,0 +1,258 @@
+---
+- name: Create configuration directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/steward, mode: "0755" }
+    - { path: /etc/steward/config, mode: "0750", group: steward-api }
+    - { path: /etc/steward/secrets, mode: "0711" }
+    - { path: /etc/steward/secrets/projects, mode: "0711" }
+    - { path: /etc/steward/secrets/notifications, mode: "0700" }
+    - { path: /etc/steward/secrets/bot, mode: "0700" }
+    - { path: /etc/steward/pki, mode: "0700" }
+    - { path: /opt/steward, mode: "0755" }
+    - { path: /opt/steward/releases, mode: "0755" }
+    - { path: "{{ steward_release_dir }}", mode: "0755" }
+    - { path: "{{ steward_release_dir }}/dist", mode: "0755" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Create controller state directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: steward-ctl
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /var/lib/steward-controller, group: steward-ctl, mode: "0711" }
+    - { path: /var/lib/steward-controller/export, group: steward-obs, mode: "2750" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Plan durable platform activation before changing files
+  ansible.builtin.include_tasks: activation.yml
+
+- name: Copy release files (verified against the release manifest on the controller)
+  ansible.builtin.copy:
+    src: "{{ steward_release.dir }}/{{ item.key }}"
+    dest: "{{ steward_release_dir }}/dist/{{ item.key | basename }}"
+    mode: "0644"
+  loop: "{{ steward_release.files | dict2items | rejectattr('key', 'match', '^bundles/') }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: platform_dist
+
+- name: Copy bundled applications
+  ansible.builtin.copy:
+    src: "{{ steward_release.dir }}/bundles"
+    dest: "{{ steward_release_dir }}/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+
+- name: Install locked dependencies (hash-verified)
+  ansible.builtin.pip:
+    requirements: "{{ steward_release_dir }}/dist/requirements.txt"
+    virtualenv: "{{ steward_release_dir }}/venv"
+    virtualenv_command: /usr/bin/python3 -m venv
+    extra_args: "--require-hashes --no-deps --only-binary=:all:"
+
+- name: Install steward
+  ansible.builtin.pip:
+    name: "file://{{ steward_release_dir }}/dist/{{ steward_release.wheel }}"
+    virtualenv: "{{ steward_release_dir }}/venv"
+    extra_args: --no-deps --no-index
+    # Same version, different content (development builds): install again.
+    state: "{{ 'forcereinstall' if (platform_dist is changed or platform_activation_required) else 'present' }}"
+  notify: Restart platform services
+
+- name: Activate release
+  ansible.builtin.file:
+    src: "{{ steward_release_dir }}"
+    dest: /opt/steward/current
+    state: link
+  notify: Restart platform services
+
+# Compare-and-set: never replace a revision the deployment did not start from (for example
+# one the executor applied meanwhile). Guarded runs are covered by the fence and its lock.
+- name: Require the applied revision this deployment started from
+  ansible.builtin.command:
+    argv:
+      - "{{ steward_release_dir }}/venv/bin/python"
+      - -I
+      - -m
+      - steward.executor.config_apply
+      - check-base
+      - --expected
+      - "{{ steward_base_revision }}"
+  register: platform_base_check
+  changed_when: false
+  failed_when: platform_base_check.rc != 0
+  when:
+    - not preflight_guarded
+    - not ansible_check_mode
+    - steward_base_revision is defined
+
+- name: Write desired configuration (applied revision)
+  ansible.builtin.copy:
+    dest: /etc/steward/config/desired.json
+    content: "{{ steward_desired_config | to_json(sort_keys=true) }}\n"
+    owner: root
+    group: steward-api
+    mode: "0640"
+
+- name: Resolve platform user ids
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ item }}"
+  loop: [steward-api, steward-ctl, steward-col, steward-scan, steward-backup]
+  register: platform_ids
+  when: not ansible_check_mode
+
+- name: Write executor registry
+  ansible.builtin.copy:
+    dest: /etc/steward/executor.json
+    content: "{{ steward_registry | combine({'peers': platform_peers | combine(platform_backup_peer)}) | to_nice_json(sort_keys=true) }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  vars:
+    platform_peers:
+      api: "{{ platform_ids.results[0].ansible_facts.getent_passwd['steward-api'][1] | int }}"
+      controller: "{{ platform_ids.results[1].ansible_facts.getent_passwd['steward-ctl'][1] | int }}"
+      collector: "{{ platform_ids.results[2].ansible_facts.getent_passwd['steward-col'][1] | int }}"
+      scanner: "{{ platform_ids.results[3].ansible_facts.getent_passwd['steward-scan'][1] | int }}"
+    platform_backup_peer: >-
+      {{ {'backup': platform_ids.results[4].ansible_facts.getent_passwd['steward-backup'][1] | int}
+         if steward_backup.enabled else {} }}
+  when: not ansible_check_mode
+
+- name: Transfer admin token
+  ansible.builtin.copy:
+    dest: /etc/steward/secrets/admin_token
+    content: "{{ platform_token }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  vars:
+    platform_token: >-
+      {{ lookup('ansible.builtin.env', steward_admin.token.target)
+         if steward_admin.token.kind == 'env'
+         else lookup('ansible.builtin.file', steward_admin.token.target) }}
+  no_log: true
+  diff: false
+  notify: Restart admin API
+
+- name: Write notification configuration (references only)
+  ansible.builtin.copy:
+    dest: /etc/steward/notifications.json
+    content: "{{ steward_channels | to_nice_json }}\n"
+    owner: root
+    group: steward-notify
+    mode: "0640"
+  notify: Restart platform services
+
+- name: Transfer notification credentials
+  ansible.builtin.copy:
+    dest: "/etc/steward/secrets/notifications/{{ item.name }}"
+    content: >-
+      {{ lookup('ansible.builtin.env', item.target)
+         if item.kind == 'env' else lookup('ansible.builtin.file', item.target) }}
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ steward_channel_secrets }}"
+  no_log: true
+  diff: false
+  notify: Restart platform services
+
+- name: Write information bot configuration
+  ansible.builtin.copy:
+    dest: /etc/steward/bot.json
+    content: "{{ steward_bot | to_nice_json }}\n"
+    owner: root
+    group: steward-bot
+    mode: "0640"
+  notify: Restart platform services
+
+- name: Transfer information bot verification keys
+  ansible.builtin.copy:
+    dest: "/etc/steward/secrets/bot/{{ item.name }}"
+    content: >-
+      {{ lookup('ansible.builtin.env', item.target)
+         if item.kind == 'env' else lookup('ansible.builtin.file', item.target) }}
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ steward_bot_secrets }}"
+  no_log: true
+  diff: false
+  notify: Restart platform services
+
+- name: Write scanner configuration without secret values
+  ansible.builtin.copy:
+    dest: /etc/steward/scanner.json
+    content: "{{ {'config_revision': steward_config_revision, 'scanning': steward_scanning} | to_nice_json }}\n"
+    owner: root
+    group: steward-scan
+    mode: "0640"
+  notify: Restart platform services
+
+- name: Install verified Trivy binary when enabled
+  ansible.builtin.include_tasks: trivy.yml
+  when: steward_scanning.enabled and steward_scanning.trivy
+
+- name: Install verified Restic binary when backups are enabled
+  ansible.builtin.include_tasks: restic.yml
+  when: steward_backup.enabled
+
+- name: Reconcile backup upload service
+  ansible.builtin.include_tasks: backup_service.yml
+
+- name: Reconcile the private Ollama service
+  ansible.builtin.include_tasks: ollama.yml
+
+- name: Stage the inference candidate and start its private units
+  ansible.builtin.include_tasks: inference.yml
+  vars:
+    platform_inference_phase: stage
+  when: steward_inference_candidate is defined and not ansible_check_mode
+
+- name: Stage the repository fetch candidate without publishing authority
+  ansible.builtin.include_tasks: repository-fetch.yml
+  vars:
+    platform_repository_fetch_phase: stage
+  when: steward_repository_fetch is defined and not ansible_check_mode
+
+- name: Install systemd units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: "0644"
+  loop: "{{ steward_platform_units }}"
+  register: platform_units
+  notify: Restart platform services
+
+- name: Stop and disable unconfigured platform services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+    daemon_reload: "{{ platform_units is changed }}"
+  loop: "{{ steward_inactive_platform_units }}"
+  when: not ansible_check_mode
+
+- name: Enable and start configured platform services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: "{{ platform_units is changed }}"
+  loop: "{{ steward_active_platform_units }}"
+  when: not ansible_check_mode

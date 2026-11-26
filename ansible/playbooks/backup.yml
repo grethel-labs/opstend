@@ -1,0 +1,26 @@
+---
+- name: Request one revision-bound scheduled capture
+  hosts: all
+  become: true
+  tasks:
+    - name: Request capture through the registered executor action
+      ansible.builtin.command:
+        argv:
+          - /opt/steward/current/venv/bin/steward-host
+          - backup-schedule
+          - "{{ steward_backup_project }}"
+          - --expected-revision
+          - "{{ steward_backup_expected_revision }}"
+      register: steward_backup_request
+      changed_when: >-
+        steward_backup_request.rc == 0 and
+        not (steward_backup_request.stdout | from_json).reused
+
+    - name: Store the response on the controller
+      ansible.builtin.copy:
+        content: "{{ steward_backup_request.stdout }}"
+        dest: "{{ steward_local_dir }}/backup-result.json"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      changed_when: false

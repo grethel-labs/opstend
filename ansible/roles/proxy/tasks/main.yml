@@ -1,0 +1,199 @@
+---
+- name: Create proxy directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: steward-proxy
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/steward/proxy, owner: root, mode: "0750" }
+    - { path: /etc/steward/proxy/dynamic, owner: root, mode: "0750" }
+    - { path: /etc/steward/proxy/certs, owner: root, mode: "0750" }
+    - { path: /srv/steward/proxy/state, owner: steward-proxy, mode: "0700" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Create internal CA key
+  community.crypto.openssl_privatekey:
+    path: /etc/steward/pki/ca.key
+    # RSA: community.crypto 3.0.5 cannot create ECC keys with the
+    # python3-cryptography 46 shipped in Ubuntu 26.04.
+    type: RSA
+    size: 3072
+    mode: "0600"
+
+- name: Create internal CA request
+  community.crypto.openssl_csr:
+    path: /etc/steward/pki/ca.csr
+    privatekey_path: /etc/steward/pki/ca.key
+    common_name: "steward internal CA ({{ steward_server_name }})"
+    basic_constraints: ["CA:TRUE", "pathlen:0"]
+    basic_constraints_critical: true
+    key_usage: [keyCertSign, cRLSign]
+    key_usage_critical: true
+    mode: "0600"
+
+- name: Create internal CA certificate
+  community.crypto.x509_certificate:
+    path: /etc/steward/pki/ca.crt
+    csr_path: /etc/steward/pki/ca.csr
+    privatekey_path: /etc/steward/pki/ca.key
+    provider: selfsigned
+    selfsigned_not_after: +3650d
+    mode: "0644"
+
+- name: Create proxy TLS key
+  community.crypto.openssl_privatekey:
+    path: /etc/steward/proxy/certs/internal.key
+    # RSA: community.crypto 3.0.5 cannot create ECC keys with the
+    # python3-cryptography 46 shipped in Ubuntu 26.04.
+    type: RSA
+    size: 3072
+    owner: root
+    group: steward-proxy
+    mode: "0640"
+
+- name: Create proxy TLS request
+  community.crypto.openssl_csr:
+    path: /etc/steward/proxy/certs/internal.csr
+    privatekey_path: /etc/steward/proxy/certs/internal.key
+    common_name: "{{ steward_admin.hostname }}"
+    subject_alt_name: "{{ steward_proxy.internal_sans | default(proxy_legacy_sans) }}"
+    key_usage: [digitalSignature]
+    extended_key_usage: [serverAuth]
+    owner: root
+    group: steward-proxy
+    mode: "0640"
+  register: proxy_csr
+  vars:
+    proxy_legacy_sans: "{{ (steward_proxy.internal_hosts | map('regex_replace', '^', 'DNS:') | list) + ['IP:127.0.0.1'] }}"
+
+- name: Issue proxy TLS certificate
+  community.crypto.x509_certificate:
+    path: /etc/steward/proxy/certs/internal.crt
+    csr_path: /etc/steward/proxy/certs/internal.csr
+    provider: ownca
+    ownca_path: /etc/steward/pki/ca.crt
+    ownca_privatekey_path: /etc/steward/pki/ca.key
+    ownca_not_after: +825d
+    owner: root
+    group: steward-proxy
+    mode: "0640"
+  register: proxy_cert
+
+- name: Write Traefik static configuration
+  ansible.builtin.copy:
+    dest: /etc/steward/proxy/traefik.yml
+    content: "{{ steward_proxy.static }}"
+    owner: root
+    group: steward-proxy
+    mode: "0640"
+  register: proxy_static
+
+- name: Write Traefik routes (atomic, watched by the file provider)
+  ansible.builtin.copy:
+    dest: /etc/steward/proxy/dynamic/routes.yml
+    content: "{{ steward_proxy.dynamic }}"
+    owner: root
+    group: steward-proxy
+    mode: "0640"
+
+- name: Stage the volatile Traefik directory for application routes
+  when: steward_proxy.application_runtime is defined
+  block:
+    - name: Inspect the volatile Traefik directory
+      ansible.builtin.stat:
+        path: "{{ steward_proxy.application_runtime }}"
+        follow: false
+      register: proxy_application_directory
+
+    - name: Require a protected volatile Traefik directory when present
+      ansible.builtin.assert:
+        that:
+          - proxy_application_directory.stat.isdir
+          - proxy_application_directory.stat.uid == 0
+          - proxy_application_directory.stat.gr_name == 'steward-proxy'
+          - proxy_application_directory.stat.mode == '0750'
+      when: proxy_application_directory.stat.exists
+
+    - name: Create the volatile Traefik directory
+      ansible.builtin.file:
+        path: "{{ steward_proxy.application_runtime }}"
+        state: directory
+        owner: root
+        group: steward-proxy
+        mode: "0750"
+        follow: false
+
+    - name: Inspect volatile legacy Traefik routes
+      ansible.builtin.stat:
+        path: "{{ steward_proxy.application_runtime }}/routes.yml"
+        follow: false
+        get_checksum: false
+      register: proxy_application_legacy_routes
+
+    - name: Require protected volatile legacy Traefik routes when present
+      ansible.builtin.assert:
+        that:
+          - proxy_application_legacy_routes.stat.isreg
+          - proxy_application_legacy_routes.stat.nlink == 1
+          - proxy_application_legacy_routes.stat.uid == 0
+          - proxy_application_legacy_routes.stat.gr_name == 'steward-proxy'
+          - proxy_application_legacy_routes.stat.mode == '0640'
+      when: proxy_application_legacy_routes.stat.exists
+
+    - name: Copy legacy routes atomically into the watched directory
+      ansible.builtin.copy:
+        dest: "{{ steward_proxy.application_runtime }}/routes.yml"
+        content: "{{ steward_proxy.dynamic }}"
+        owner: root
+        group: steward-proxy
+        mode: "0640"
+        follow: false
+
+    - name: Seed only legacy Traefik routes on boot
+      ansible.builtin.copy:
+        dest: /etc/tmpfiles.d/steward-proxy-dynamic.conf
+        content: |
+          d {{ steward_proxy.application_runtime }} 0750 root steward-proxy - -
+          C {{ steward_proxy.application_runtime }}/routes.yml 0640 root steward-proxy - /etc/steward/proxy/dynamic/routes.yml
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: Remove the legacy route seed when using the persistent Traefik directory
+  ansible.builtin.file:
+    path: /etc/tmpfiles.d/steward-proxy-dynamic.conf
+    state: absent
+  when: steward_proxy.application_runtime is not defined
+
+- name: Provide proxy image
+  ansible.builtin.include_tasks: ../../common/tasks/image.yml
+  vars:
+    image_ref: "{{ steward_proxy.image }}"
+    image_tag: "{{ steward_proxy.image_tag }}"
+    image_user: steward-proxy
+    image_archive: "/var/lib/steward/images/{{ steward_proxy.image | hash('sha256') }}.tar"
+
+- name: Install proxy Quadlet
+  ansible.builtin.copy:
+    dest: "/etc/containers/systemd/users/{{ steward_uids['steward-proxy'] }}/proxy.container"
+    content: "{{ steward_proxy.quadlet }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: proxy_quadlet
+  when: not ansible_check_mode
+
+- name: Run proxy
+  ansible.builtin.systemd_service:
+    name: proxy.service
+    scope: user
+    daemon_reload: true
+    state: "{{ 'restarted' if (proxy_quadlet is changed or proxy_static is changed or proxy_cert is changed) else 'started' }}"
+  become: true
+  become_user: steward-proxy
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ steward_uids['steward-proxy'] }}"
+  when: not ansible_check_mode

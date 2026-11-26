@@ -1,0 +1,34 @@
+---
+- name: Create root-owned backup tool directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /var/cache/steward-tools
+    - "/opt/steward/tools/restic-{{ steward_restic_version }}"
+
+- name: Fetch pinned Restic archive with SHA256 verification
+  ansible.builtin.get_url:
+    url: "https://github.com/restic/restic/releases/download/v{{ steward_restic_version }}/{{ steward_restic_archives[ansible_facts.architecture].file }}"
+    dest: "/var/cache/steward-tools/{{ steward_restic_archives[ansible_facts.architecture].file }}"
+    checksum: "sha256:{{ steward_restic_archives[ansible_facts.architecture].sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: not ansible_check_mode
+
+- name: Install only the verified bounded Restic executable
+  ansible.builtin.command:
+    argv:
+      - /opt/steward/current/venv/bin/python
+      - -m
+      - steward.core.tool_install
+      - "/var/cache/steward-tools/{{ steward_restic_archives[ansible_facts.architecture].file }}"
+      - "/opt/steward/tools/restic-{{ steward_restic_version }}/restic"
+      - "{{ steward_restic_archives[ansible_facts.architecture].sha256 }}"
+  register: platform_restic_install
+  changed_when: platform_restic_install.stdout | trim == 'installed'
+  when: not ansible_check_mode

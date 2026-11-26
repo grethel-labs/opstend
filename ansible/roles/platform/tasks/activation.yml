@@ -1,0 +1,56 @@
+---
+# Keep the last *verified activation* separate from desired files. On an
+# interrupted run copy tasks may already be unchanged while old processes live.
+- name: Calculate non-secret activation inputs
+  ansible.builtin.set_fact:
+    platform_activation_inputs:
+      revision: "{{ steward_config_revision }}"
+      files: "{{ steward_release.files }}"
+      active_units: "{{ steward_active_platform_units }}"
+      credentials: {}
+      units: {}
+  no_log: true
+
+- name: Bind activation to current credential contents without logging values
+  ansible.builtin.set_fact:
+    platform_activation_inputs: >-
+      {{ platform_activation_inputs | combine({'credentials':
+         platform_activation_inputs.credentials | combine({item.name: platform_credential | hash('sha256')})}) }}
+  vars:
+    platform_credential: >-
+      {{ lookup('ansible.builtin.env', item.target) if item.kind == 'env'
+         else lookup('ansible.builtin.file', item.target) }}
+  loop: "{{ steward_activation_secrets }}"
+  no_log: true
+
+- name: Bind activation to rendered service units
+  ansible.builtin.set_fact:
+    platform_activation_inputs: >-
+      {{ platform_activation_inputs | combine({'units': platform_activation_inputs.units |
+         combine({item: lookup('ansible.builtin.template', item ~ '.j2') | hash('sha256')})}) }}
+  loop: "{{ steward_platform_units }}"
+  no_log: true
+
+- name: Calculate platform activation fingerprint
+  ansible.builtin.set_fact:
+    platform_activation_fingerprint: "{{ platform_activation_inputs | to_json(sort_keys=true) | hash('sha256') }}"
+  no_log: true
+
+- name: Read last verified platform activation
+  ansible.builtin.slurp:
+    path: "{{ platform_activation_record_path | default('/etc/steward/platform-activation') }}"
+  register: platform_activated
+  failed_when: false
+  no_log: true
+
+- name: Reconcile services until the desired inputs have been activated and verified
+  ansible.builtin.debug:
+    msg: Platform service activation is reconciled at the verification boundary.
+  changed_when: >-
+    (platform_activated.content | default('') | b64decode | trim) != platform_activation_fingerprint
+  notify: Restart platform services
+
+- name: Retain activation state for same-version package reconciliation
+  ansible.builtin.set_fact:
+    platform_activation_required: >-
+      {{ (platform_activated.content | default('') | b64decode | trim) != platform_activation_fingerprint }}

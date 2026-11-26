@@ -1,0 +1,33 @@
+@startuml
+title Verifiziertes Image-Update – Freigabe, Prüfung und Wiederherstellung
+skinparam shadowing false
+participant "Controller / Operator" as c
+participant "Executor" as e
+participant "Workload (Podman)" as w
+database "Journal und Capture" as j
+
+c -> e : update_validate mit Attestierung und Freigabe
+e -> e : Signaturen, Revision und Projektvertrag prüfen
+e --> c : Gebundene Einmal-Freigabe
+c -> e : apply_verified_image
+e -> e : Evidenz, Fenster, Kill-Switch, Backup-Stand und Sperre prüfen
+e -> j : Update-Phase dauerhaft erfassen
+alt reversible oder restore_required
+  e -> j : Daten bei gestopptem Workload sichern
+  e -> j : Restore-Probe bei restore_required
+end
+e -> w : Neues Image installieren und starten
+e -> w : Laufenden Digest, Health und Isolation prüfen
+alt Beobachtung erfolgreich
+  e --> c : Geprüft angewandt
+else Fehler
+  e -> j : Exakten Capture je nach Migrationsvertrag zurückspielen
+  e -> w : Vorheriges Image wiederherstellen und verifizieren
+  e --> c : Update- und Recovery-Ergebnis
+end
+note over c, e
+  Operator-Rollback bindet Freigabe und Digest.
+  Automatischer Rollback ist auf migration=none begrenzt.
+  Beide Pfade hängen von den Einsatzfreigaben ab.
+end note
+@enduml

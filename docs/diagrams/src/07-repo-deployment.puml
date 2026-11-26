@@ -1,0 +1,28 @@
+@startuml
+title Repository-Deployment – vom exakten Commit zur geprüften Freigabe
+skinparam shadowing false
+participant "Fetch" as f
+participant "Vertrag und Eignung" as s
+participant "Isolierter Builder" as b
+participant "Unabhängiger Validator" as v
+actor "Separater Freigabegeber" as a
+participant "Executor" as e
+
+f -> f : Exakten Commit mit begrenztem Lesezugriff abrufen
+f -> s : Unveränderlicher Quellstand
+s -> s : Vertrag aus Konfiguration, Repo-Datei\noder optionalem Vorschlag prüfen
+alt Vertrag fehlt oder ist ungeeignet
+  s --> f : Begründetes Prüfergebnis
+else Vertrag geeignet
+  s -> b : Gebundenen Quellstand isoliert bauen
+  b -> v : Image-Digest und Build-Nachweis
+  v -> v : Digest, Tests und Scanner-Nachweise prüfen
+  v --> a : Signierte Attestierung
+  a -> e : update_validate mit Attestierung und Freigabe
+  a -> e : apply_verified_image in Abhängigkeitsfolge
+end
+note over b, e
+  Die öffentliche Konfiguration für diesen Pfad ist gesperrt.
+  Reparaturen reichen Änderungen über einen PR ein (R05).
+end note
+@enduml

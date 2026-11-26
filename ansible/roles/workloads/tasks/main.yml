@@ -1,0 +1,25 @@
+---
+- name: Deploy projects
+  ansible.builtin.include_tasks: project.yml
+  loop: "{{ steward_projects }}"
+  loop_control:
+    loop_var: project
+    label: "{{ project.id }}"
+
+- name: Install and activate private application workloads
+  ansible.builtin.include_tasks: applications.yml
+  when:
+    - steward_applications | default([]) | rejectattr("services", "equalto", []) | list | length > 0
+    - not ansible_check_mode
+
+- name: Retire the unit ownership manifest after verifying removed application bindings
+  ansible.builtin.copy:
+    dest: /var/lib/steward/application-units.json
+    content: "[]\n"
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - not ansible_check_mode
+    - identities_application_transition is defined
+    - steward_applications | default([]) | rejectattr("services", "equalto", []) | list | length == 0

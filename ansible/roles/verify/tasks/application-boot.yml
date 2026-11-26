@@ -1,0 +1,89 @@
+---
+- name: Inhibit application boot before installing the first boot unit
+  ansible.builtin.command:
+    argv: >-
+      {{ ['/opt/steward/current/venv/bin/python', '-m', 'steward.application_boot',
+          'inhibit', identities_application_boot_generation]
+         + (site_application_boot_arguments if site_private_application | default(false) else []) }}
+  no_log: "{{ site_private_application | default(false) }}"
+  register: verify_application_boot_inhibit
+  changed_when: verify_application_boot_inhibit.rc == 0 and (verify_application_boot_inhibit.stdout | from_json).changed
+  when:
+    - not identities_application_boot_previous
+    - not (site_private_application | default(false))
+
+- name: Install the application boot unit
+  ansible.builtin.template:
+    src: steward-applications.service.j2
+    dest: /etc/systemd/system/steward-applications.service
+    owner: root
+    group: root
+    mode: "0644"
+  when: identities_application_active_users | length > 0
+
+- name: Load the application boot unit
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: identities_application_active_users | length > 0
+
+- name: Stop the retired application boot unit
+  ansible.builtin.systemd_service:
+    name: steward-applications.service
+    state: stopped
+  when:
+    - identities_application_active_users | length == 0
+    - identities_application_boot_unit.stat.exists
+
+- name: Stop any remaining owned units before retiring application boot
+  ansible.builtin.command:
+    argv: >-
+      {{ ['/opt/steward/current/venv/bin/python', '-m', 'steward.application_boot', 'stop']
+         + ([identities_application_boot_generation] + site_application_boot_arguments
+            if site_private_application | default(false) else []) }}
+  no_log: "{{ site_private_application | default(false) }}"
+  register: verify_application_boot_stop
+  changed_when: verify_application_boot_stop.rc == 0 and (verify_application_boot_stop.stdout | from_json).changed
+  when: identities_application_active_users | length == 0
+
+- name: Disable the stopped application boot unit
+  ansible.builtin.systemd_service:
+    name: steward-applications.service
+    enabled: false
+  when:
+    - identities_application_active_users | length == 0
+    - identities_application_boot_unit.stat.exists
+
+- name: Publish the verified application boot authority and current ownership
+  ansible.builtin.command:
+    argv: >-
+      {{ ['/opt/steward/current/venv/bin/python', '-m', 'steward.application_boot',
+          'publish', identities_application_boot_generation]
+         + (site_application_boot_arguments if site_private_application | default(false) else []) }}
+    stdin: >-
+      {{ identities_application_boot_inputs | combine({'source': steward_nftables | hash('sha256')}) | to_json(sort_keys=true) }}
+  no_log: "{{ site_private_application | default(false) }}"
+  register: verify_application_boot_publish
+  changed_when: verify_application_boot_publish.rc == 0 and (verify_application_boot_publish.stdout | from_json).changed
+
+- name: Activate the verified application boot unit
+  ansible.builtin.systemd_service:
+    name: steward-applications.service
+    state: started
+  when: identities_application_active_users | length > 0
+
+- name: Enable verified applications for normal boot
+  ansible.builtin.systemd_service:
+    name: steward-applications.service
+    enabled: true
+  when: identities_application_active_users | length > 0
+
+- name: Remove the retired application boot unit
+  ansible.builtin.file:
+    path: /etc/systemd/system/steward-applications.service
+    state: absent
+  when: identities_application_active_users | length == 0
+
+- name: Reload systemd after removing the application boot unit
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: identities_application_active_users | length == 0

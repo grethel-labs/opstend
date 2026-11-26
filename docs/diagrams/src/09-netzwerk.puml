@@ -1,0 +1,23 @@
+@startuml
+title Netzwerk: eingehend nur über die Kante, ausgehend je Service-UID
+nwdiag {
+  network internet {
+    address = "öffentlich"
+    angreifer [description = "Nutzer / Angreifer"];
+    fw [address = "nftables: drop außer SSH, ICMP; 80/443 bei Opt-in"];
+  }
+  network loopback {
+    address = "Host-Loopback (169.254.1.3 via pasta)"
+    fw;
+    proxy [description = "Traefik 9443 privat, 8080/8443 öffentlich"];
+    api [description = "steward-api"];
+    bot [description = "steward-bot (opt-in)"];
+    shop [description = "stw-shop (egress: none)"];
+  }
+  network egress {
+    address = "ausgehend je UID: none | public-web | rules"
+    shop;
+    dns [description = "public-web: DNS + TCP 80/443 ins öffentliche Netz"];
+  }
+}
+@enduml

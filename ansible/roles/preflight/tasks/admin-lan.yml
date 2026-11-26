@@ -1,0 +1,140 @@
+---
+- name: Read the guest's IPv4 addresses
+  ansible.builtin.command:
+    argv: [ip, -j, -d, "-4", address, show, up]
+  register: preflight_admin_lan_addresses
+  changed_when: false
+  check_mode: false
+
+- name: Read the guest's directly connected IPv4 routes
+  ansible.builtin.command:
+    argv: [ip, -j, "-4", route, show, scope, link]
+  register: preflight_admin_lan_routes
+  changed_when: false
+  check_mode: false
+
+- name: Identify usable RFC1918 addresses with their guest interfaces and prefixes
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -I
+      - -c
+      - |
+        import ipaddress
+        import json
+        import sys
+
+        private = tuple(map(ipaddress.IPv4Network, ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")))
+        facts = json.load(sys.stdin)
+        connected = {
+            (route.get("dev"), route.get("dst"))
+            for route in facts["routes"]
+            if route.get("type", "unicast") == "unicast" and "gateway" not in route
+        }
+        candidates, binds = [], []
+        for device in facts["addresses"]:
+            flags = device["flags"]
+            if (
+                "UP" not in flags
+                or "LOOPBACK" in flags
+                or device["operstate"] not in {"UP", "UNKNOWN"}
+            ):
+                continue
+            for address in device.get("addr_info", []):
+                if address["family"] != "inet" or address["scope"] != "global":
+                    continue
+                if any(address.get(flag) for flag in ("tentative", "dadfailed", "deprecated")):
+                    continue
+                if address.get("valid_life_time") == 0 or address.get("preferred_life_time") == 0:
+                    continue
+                bind = ipaddress.IPv4Interface(f'{address["local"]}/{address["prefixlen"]}')
+                subnet = bind.network
+                if not any(subnet.subnet_of(network) for network in private):
+                    continue
+                if subnet.prefixlen < 31 and bind.ip in (subnet.network_address, subnet.broadcast_address):
+                    continue
+                candidate = {"interface": device["ifname"], "bind": str(bind)}
+                binds.append(candidate)
+                if (
+                    device.get("link_type") == "ether"
+                    and device.get("linkinfo", {}).get("info_kind")
+                    in {None, "bond", "bridge", "team", "vlan", "veth", "macvlan", "ipvlan"}
+                    and "BROADCAST" in flags
+                    and "POINTOPOINT" not in flags
+                    and subnet.prefixlen < 32
+                    and (device["ifname"], str(subnet)) in connected
+                ):
+                    candidates.append(candidate)
+        print(json.dumps({"candidates": candidates, "binds": binds}))
+    stdin: >-
+      {{ {'addresses': preflight_admin_lan_addresses.stdout | from_json,
+          'routes': preflight_admin_lan_routes.stdout | from_json} | to_json }}
+  register: preflight_admin_lan_inventory
+  changed_when: false
+  check_mode: false
+
+- name: Store the current guest LAN candidates
+  ansible.builtin.set_fact:
+    preflight_admin_lan_candidates: "{{ (preflight_admin_lan_inventory.stdout | from_json).candidates }}"
+
+- name: Check private LAN support in the installed guarded admission parser
+  ansible.builtin.command:
+    argv:
+      - /opt/steward/current/venv/bin/python
+      - -I
+      - -c
+      - |
+        from steward.core.config import Admin
+
+        raise SystemExit("lan" not in Admin.model_fields)
+  register: preflight_admin_lan_parser
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: preflight_guarded
+
+- name: Require the upgraded parser before guarded private LAN deployment
+  ansible.builtin.assert:
+    that: preflight_admin_lan_parser.rc | default(1) == 0
+    fail_msg: >-
+      The installed guarded release cannot admit private LAN configuration.
+      First deploy the new signed release with the applied admin settings.
+      Then deploy again with admin.access set to private-lan.
+  when: preflight_guarded
+
+- name: Require the reviewed LAN scope on the native site path
+  when: preflight_site | default(false)
+  block:
+    - name: Refuse a missing or unavailable private LAN bind
+      ansible.builtin.assert:
+        that:
+          - steward_admin.lan | default(none) is mapping
+          - >-
+            {'interface': steward_admin.lan.interface | default(none),
+             'bind': steward_admin.lan.bind | default(none)} in preflight_admin_lan_site_binds
+        fail_msg: The resolved private LAN bind must match an up IPv4 interface on the target.
+      vars:
+        preflight_admin_lan_site_binds: >-
+          {{ (preflight_admin_lan_inventory.stdout | from_json).binds
+             if (steward_admin.lan | default({}, true)).allowed_sources | default([]) | length
+             else preflight_admin_lan_candidates }}
+
+    - name: Read the native site SSH connection
+      ansible.builtin.command:
+        argv: [printenv, SSH_CONNECTION]
+      become: false
+      register: preflight_admin_lan_ssh
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse the guest SSH port as the private admin LAN port
+      ansible.builtin.assert:
+        that:
+          - preflight_admin_lan_ssh.stdout.split() | length == 4
+          - preflight_admin_lan_ssh_port is match('^[0-9]{1,5}$')
+          - preflight_admin_lan_ssh_port | int >= 1
+          - preflight_admin_lan_ssh_port | int <= 65535
+          - preflight_admin_lan_ssh_port | int != steward_admin.port | int
+        fail_msg: The private LAN admin port must differ from the actual guest SSH port.
+      vars:
+        preflight_admin_lan_ssh_port: "{{ preflight_admin_lan_ssh.stdout.split() | last | default('') }}"

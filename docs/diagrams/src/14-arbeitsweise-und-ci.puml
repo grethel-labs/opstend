@@ -1,0 +1,20 @@
+@startuml
+title Vom Codepfad zum Prüfbeleg
+skinparam shadowing false
+start
+:AGENTS.md nennt den passenden Skill;
+:Skill führt vom Einstieg zur Zuständigkeit und zu Tests;
+:Guidelines helfen passende Evidenz zu wählen;
+:Geänderte Vertrauensgrenze mit einem Negativfall prüfen;
+:CI führt die referenzierten Guardrail-Tests aus;
+if (Alle Regeln nachgewiesen?) then (ja)
+  :CI führt übrige Python-Tests separat aus;
+  if (Host-Abnahme für die Änderung erforderlich?) then (ja)
+    :Autorisierte Host-Prüfung dokumentieren;
+  endif
+  :Neue Abnahmebelege der Karte in STATUS festhalten;
+else (nein)
+  :Korrektur am betroffenen Vertrag oder Test;
+endif
+stop
+@enduml

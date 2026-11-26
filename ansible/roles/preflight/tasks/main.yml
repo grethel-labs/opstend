@@ -1,0 +1,392 @@
+---
+# Every task here is read-only on the target.
+- name: Gather facts
+  ansible.builtin.setup:
+    gather_subset: [min, hardware, mounts]
+
+- name: Refuse unsupported operating systems
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == 'Ubuntu'
+      - ansible_facts.distribution_version == '26.04'
+      - ansible_facts.architecture in ['x86_64', 'aarch64']
+      - ansible_facts.service_mgr == 'systemd'
+    fail_msg: >-
+      Unsupported system {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}
+      ({{ ansible_facts.architecture }}). Profile {{ steward_os_profile }} requires Ubuntu 26.04
+      with systemd. Nothing was changed.
+
+- name: Check for cgroup v2
+  ansible.builtin.stat:
+    path: /sys/fs/cgroup/cgroup.controllers
+  register: preflight_cgroup
+
+- name: Look for foreign platform layouts
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - /srv/isobox
+    - /etc/steward/install.json
+    - /etc/steward
+    - /srv/steward
+    - /run/docker.sock
+  register: preflight_paths
+
+- name: Index path results
+  ansible.builtin.set_fact:
+    preflight_exists: "{{ dict(preflight_paths.results | map(attribute='item') | zip(preflight_paths.results | map(attribute='stat.exists'))) }}"
+    preflight_stats: "{{ dict(preflight_paths.results | map(attribute='item') | zip(preflight_paths.results | map(attribute='stat'))) }}"
+
+- name: Enforce migration lock and layout ownership
+  ansible.builtin.assert:
+    that:
+      - preflight_cgroup.stat.exists
+      - not preflight_exists['/srv/isobox']
+      - preflight_exists['/etc/steward/install.json'] or not (preflight_exists['/etc/steward'] or preflight_exists['/srv/steward'])
+      - not preflight_exists['/run/docker.sock']
+    fail_msg: >-
+      Refusing to continue: cgroup v2 missing, or a foreign platform layout was found
+      (/srv/isobox is migration-locked; /etc/steward or /srv/steward without an install
+      marker; a running Docker engine). No flag overrides this check. Nothing was changed.
+
+- name: Require trusted directory and marker before reading installation ownership
+  ansible.builtin.assert:
+    that:
+      - preflight_stats['/etc/steward'].isdir | default(false)
+      - not (preflight_stats['/etc/steward'].islnk | default(false))
+      - preflight_stats['/etc/steward'].uid == 0
+      - not preflight_stats['/etc/steward'].wgrp
+      - not preflight_stats['/etc/steward'].woth
+      - preflight_stats['/etc/steward/install.json'].isreg | default(false)
+      - not (preflight_stats['/etc/steward/install.json'].islnk | default(false))
+      - preflight_stats['/etc/steward/install.json'].uid == 0
+      - not preflight_stats['/etc/steward/install.json'].wgrp
+      - not preflight_stats['/etc/steward/install.json'].woth
+      - preflight_stats['/etc/steward/install.json'].size <= 4096
+    fail_msg: Untrusted install marker or directory. Nothing was changed.
+  when: preflight_exists['/etc/steward/install.json']
+
+- name: Read install marker
+  ansible.builtin.slurp:
+    path: /etc/steward/install.json
+  register: preflight_marker
+  when: preflight_exists['/etc/steward/install.json']
+
+- name: Read the trusted installation identity
+  ansible.builtin.set_fact:
+    preflight_install: "{{ (preflight_marker.content | b64decode | from_json) if preflight_exists['/etc/steward/install.json'] else {} }}"
+
+- name: Refuse a server that belongs to another configuration
+  ansible.builtin.assert:
+    that:
+      - preflight_install is mapping
+      - preflight_install.server_name == steward_server_name
+      - preflight_install.schema_version | type_debug == 'int'
+      - preflight_install.schema_version in [1, 2]
+      - preflight_install.state | default('installed') in ['initializing', 'installed']
+      - >-
+        preflight_install.schema_version == 1 or
+        (preflight_install.keys() | list | sort == ['schema_version', 'server_name', 'state'] and
+         preflight_install.state == 'installed')
+    fail_msg: This host has a different or unsupported installation marker. Nothing was changed.
+  when: preflight_exists['/etc/steward/install.json']
+
+- name: Determine site transport from the trusted installation marker
+  ansible.builtin.set_fact:
+    preflight_guarded: "{{ preflight_install.schema_version | default(1) == 2 }}"
+
+- name: Reset private LAN candidates for this preflight
+  ansible.builtin.set_fact:
+    preflight_admin_lan_candidates: []
+
+- name: Discover and verify the private admin LAN
+  ansible.builtin.include_tasks: admin-lan.yml
+  when: (steward_admin | default({})).access | default('private') == 'private-lan'
+
+- name: Require schema 2 for selection of the private application entrypoint
+  ansible.builtin.assert:
+    that:
+      - steward_private_application_deployment is boolean
+      - not steward_private_application_deployment or preflight_guarded
+    fail_msg: Private application deployment requires a boolean selector and an enrolled schema 2 host.
+  when: steward_private_application_deployment is defined
+
+- name: Select the root private application entrypoint when requested
+  ansible.builtin.set_fact:
+    preflight_private_application: "{{ steward_private_application_deployment | default(false) }}"
+
+- name: Read the exact deployment status from the protected installation
+  vars:
+    ansible_connection: ssh
+  when:
+    - steward_resume_deployment is defined
+    - not (preflight_site | default(false))
+    - not ansible_check_mode
+  block:
+    - name: Require an exact operation ID and a schema 2 installation
+      ansible.builtin.assert:
+        that:
+          - preflight_guarded
+          - ansible_connection == 'ssh'
+          - steward_resume_deployment is string
+          - steward_resume_deployment is match('^[0-9a-f]{32}\\Z')
+        fail_msg: Exact deployment recovery requires a schema 2 installation and operation ID.
+
+    - name: Query the root deployment receipt without altering host state
+      ansible.builtin.command:
+        argv:
+          - /opt/steward/current/venv/bin/python
+          - -I
+          - -m
+          - steward.executor.site_deployment
+          - status
+          - --operation-id
+          - "{{ steward_resume_deployment }}"
+      register: preflight_deployment
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Require the exact status interface on the active host release
+      ansible.builtin.assert:
+        that: preflight_deployment.rc | default(-1) != 2
+        fail_msg: >-
+          The active host release rejected the exact deployment status request.
+          If the release predates exact recovery, preserve the deployment and
+          have a host administrator review its original custody before making changes.
+
+    - name: Require a protected receipt for this operation
+      ansible.builtin.assert:
+        that: preflight_deployment.rc | default(-1) == 0
+        fail_msg: >-
+          Exact deployment status is unavailable. Have a host administrator check
+          the requested operation and the protected deployment status on the target.
+
+    - name: Decode protected deployment status for the controller
+      ansible.builtin.set_fact:
+        preflight_deployment_status: "{{ preflight_deployment.stdout | from_json }}"
+      no_log: true
+
+- name: Require graph-free site deployment before any host changes
+  when: preflight_site | default(false) and not ansible_check_mode and not preflight_private_application
+  block:
+    - name: Refuse desired applications on the site deployment path
+      ansible.builtin.assert:
+        that:
+          - steward_desired_config is mapping
+          - steward_desired_config.applications | default([]) | length == 0
+          - steward_applications | default([]) | length == 0
+        fail_msg: Site deployment requires an empty application graph. Nothing was changed.
+
+    - name: Inspect root application ownership and configuration paths
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - /var/lib/steward/application-boot.json
+        - /var/lib/steward/application-units.json
+        - /run/steward-applications/active.json
+        - /run/steward-applications/activation-handoff.json
+        - /run/steward-applications/hold
+        - /run/steward-applications/route-drain.json
+        - /run/steward-applications/route-publication.json
+        - /etc/systemd/system/steward-applications.service
+        - /run/steward-proxy-dynamic/applications.yml
+        - /etc/steward/proxy/dynamic/applications.yml
+        - /etc/steward/config
+        - /etc/steward/config/desired.json
+        - /etc/steward/executor.json
+      register: preflight_graph_paths
+
+    - name: Index application ownership and configuration paths
+      ansible.builtin.set_fact:
+        preflight_graph_stats: "{{ dict(preflight_graph_paths.results | map(attribute='item') | zip(preflight_graph_paths.results | map(attribute='stat'))) }}"
+
+    - name: Refuse residual application ownership
+      ansible.builtin.assert:
+        that:
+          - not preflight_graph_stats['/var/lib/steward/application-boot.json'].exists
+          - not preflight_graph_stats['/var/lib/steward/application-units.json'].exists
+          - not preflight_graph_stats['/run/steward-applications/active.json'].exists
+          - not preflight_graph_stats['/run/steward-applications/activation-handoff.json'].exists
+          - not preflight_graph_stats['/run/steward-applications/hold'].exists
+          - not preflight_graph_stats['/run/steward-applications/route-drain.json'].exists
+          - not preflight_graph_stats['/run/steward-applications/route-publication.json'].exists
+          - not preflight_graph_stats['/etc/systemd/system/steward-applications.service'].exists
+          - not preflight_graph_stats['/run/steward-proxy-dynamic/applications.yml'].exists
+          - not preflight_graph_stats['/etc/steward/proxy/dynamic/applications.yml'].exists
+        fail_msg: Existing application boot ownership prevents site deployment. Nothing was changed.
+
+    - name: Require a protected configuration directory before reading desired state
+      ansible.builtin.assert:
+        that:
+          - preflight_config_dir.isdir | default(false)
+          - preflight_config_dir.uid == 0
+          - not preflight_config_dir.wgrp
+          - not preflight_config_dir.woth
+        fail_msg: Untrusted Steward configuration directory. Nothing was changed.
+      vars:
+        preflight_config_dir: "{{ preflight_graph_stats['/etc/steward/config'] }}"
+      when: preflight_config_dir.exists
+
+    - name: Require protected existing graph evidence
+      ansible.builtin.assert:
+        that:
+          - preflight_graph_stats[item].isreg | default(false)
+          - preflight_graph_stats[item].uid == 0
+          - not preflight_graph_stats[item].wgrp
+          - not preflight_graph_stats[item].woth
+          - preflight_graph_stats[item].size <= 16 * 1024 * 1024
+        fail_msg: Untrusted Steward application graph evidence. Nothing was changed.
+      loop: [/etc/steward/config/desired.json, /etc/steward/executor.json]
+      when: preflight_graph_stats[item].exists
+
+    - name: Read existing root graph evidence
+      ansible.builtin.slurp:
+        path: "{{ item }}"
+      loop: [/etc/steward/config/desired.json, /etc/steward/executor.json]
+      when: preflight_graph_stats[item].exists
+      register: preflight_graph_records
+      no_log: true
+
+    - name: Refuse applications in existing root graph evidence
+      ansible.builtin.assert:
+        that:
+          - preflight_graph_record is mapping
+          - preflight_graph_record.applications | default([]) | length == 0
+        fail_msg: Existing root application graph prevents site deployment. Nothing was changed.
+      vars:
+        preflight_graph_record: "{{ item.content | b64decode | from_json }}"
+      loop: "{{ preflight_graph_records.results | rejectattr('skipped', 'defined') | list }}"
+      no_log: true
+
+- name: Check resources
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.memtotal_mb >= steward_required_memory_mb
+      - (ansible_facts.mounts | selectattr('mount', 'equalto', '/') | map(attribute='size_available') | first) > 5 * 1024 * 1024 * 1024
+    fail_msg: >-
+      Not enough resources: {{ ansible_facts.memtotal_mb }} MB RAM present,
+      {{ steward_required_memory_mb }} MB needed by reservations and limits; 5 GiB free disk
+      required on /.
+
+- name: Check that key-based SSH login exists before passwords are disabled
+  ansible.builtin.stat:
+    path: "~{{ ansible_facts.env.SUDO_USER | default(ansible_facts.user_id) }}/.ssh/authorized_keys"
+  register: preflight_keys
+  when: steward_hardening.ssh.manage and not steward_hardening.ssh.password_authentication
+
+- name: Refuse SSH hardening without authorized keys
+  ansible.builtin.assert:
+    that: preflight_keys.stat.exists and preflight_keys.stat.size > 0
+    fail_msg: >-
+      The login user has no authorized_keys. Disabling password authentication would lock
+      you out. Add a key or set hardening.ssh.password_authentication: true.
+  when: steward_hardening.ssh.manage and not steward_hardening.ssh.password_authentication
+
+# ufw.service is "active" on stock Ubuntu even when ufw itself is disabled, so
+# ask the tools for their real state instead of the unit state.
+- name: Detect an enabled ufw
+  ansible.builtin.command:
+    argv: [ufw, status]
+  register: preflight_ufw
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: steward_hardening.firewall.manage
+
+- name: Detect a running firewalld
+  ansible.builtin.command:
+    argv: [systemctl, is-active, firewalld.service]
+  register: preflight_firewalld
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: steward_hardening.firewall.manage
+
+- name: Refuse conflicting firewall managers
+  ansible.builtin.assert:
+    that:
+      - "'Status: active' not in (preflight_ufw.stdout | default(''))"
+      - (preflight_firewalld.stdout | default('')) != 'active'
+    fail_msg: >-
+      ufw or firewalld is enabled. Disable it or set hardening.firewall.manage: false
+      (service isolation by firewall is then not provided). Nothing was changed.
+  when: steward_hardening.firewall.manage
+
+- name: List listening TCP ports
+  ansible.builtin.command:
+    argv: [ss, -Htln]
+  register: preflight_ss
+  changed_when: false
+  check_mode: false
+  when: not preflight_exists['/etc/steward/install.json']
+
+- name: Refuse port conflicts on first installation
+  ansible.builtin.assert:
+    that: preflight_busy | length == 0
+    fail_msg: "Ports already in use on the target: {{ preflight_busy | join(', ') }}. Nothing was changed."
+  vars:
+    preflight_wanted: "{{ steward_listen_ports + ([80, 443, 8080, 8443] if steward_public_routes else []) }}"
+    preflight_used: "{{ preflight_ss.stdout_lines | map('split') | map(attribute=3) | map('regex_replace', '^.*:', '') | map('int') | list }}"
+    preflight_busy: "{{ preflight_wanted | intersect(preflight_used) }}"
+  when: not preflight_exists['/etc/steward/install.json']
+
+- name: Read applied revision
+  ansible.builtin.slurp:
+    path: /etc/steward/config/desired.json
+  register: preflight_applied
+  when: >-
+    not (preflight_site | default(false)) and preflight_exists['/etc/steward/install.json']
+    and preflight_deployment_status.state | default('') != 'complete'
+  failed_when: false
+  no_log: "{{ steward_resume_deployment is defined }}"
+
+- name: Read pending revision exported by the admin API
+  ansible.builtin.slurp:
+    path: /var/lib/steward-api/export/head.json
+  register: preflight_head
+  when: >-
+    not (preflight_site | default(false)) and preflight_exists['/etc/steward/install.json']
+    and preflight_deployment_status.state | default('') != 'complete'
+  failed_when: false
+  no_log: "{{ steward_resume_deployment is defined }}"
+
+- name: Read the port sshd really serves this connection on
+  ansible.builtin.command:
+    argv: [printenv, SSH_CONNECTION]
+  become: false
+  register: preflight_ssh
+  changed_when: false
+  check_mode: false
+  when: not (preflight_site | default(false))
+
+- name: Store remote state on the controller
+  ansible.builtin.copy:
+    content: "{{ preflight_remote_state | to_json }}"
+    dest: "{{ steward_local_dir }}/remote-state.json"
+    mode: "0600"
+  vars:
+    preflight_remote_state:
+      installed: "{{ preflight_exists['/etc/steward/install.json'] }}"
+      initializing: >-
+        {{ preflight_marker.content is defined and
+           (preflight_marker.content | b64decode | from_json).state | default('installed') == 'initializing' }}
+      applied: "{{ (preflight_applied.content | b64decode | from_json) if preflight_applied.content is defined else none }}"
+      head: "{{ (preflight_head.content | b64decode | from_json) if preflight_head.content is defined else none }}"
+      deployment: "{{ preflight_deployment_status | default(none) }}"
+      ssh_port: "{{ preflight_ssh.stdout.split() | last | int }}"
+      admin_lan_candidates: "{{ preflight_admin_lan_candidates }}"
+      memtotal_mb: "{{ ansible_facts.memtotal_mb }}"
+      architecture: "{{ ansible_facts.architecture }}"
+      kernel: "{{ ansible_facts.kernel }}"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+  no_log: "{{ steward_resume_deployment is defined }}"
+  when: not (preflight_site | default(false))
