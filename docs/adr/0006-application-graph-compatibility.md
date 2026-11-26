@@ -105,7 +105,7 @@ maps to the shared host account is confined by the container namespaces and
 the configured mounts. A foreign process executing as that account in the
 host namespace can access the rootless Podman store and user manager. It can
 create or replace an object with a registered name, join a Pod, queue a job,
-or alter user-owned evidence. The group lock orders Steward operations. The
+or alter user-owned evidence. The group lock orders OpsTend operations. The
 runtime contract must also protect foreign Pod and container objects against
 these competing actions. This isolation requires evidence beyond account login
 and lingering settings.

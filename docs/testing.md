@@ -71,7 +71,7 @@ Not proven: nftables, separate service users, systemd units, boot behavior.
 
 ## Level 3 — fresh VM (`tests/integration/vm/`)
 
-The actual acceptance test: Ubuntu 26.04 cloud image, `./steward deploy`, second
+The actual acceptance test: Ubuntu 26.04 cloud image, `./opstend deploy`, second
 run with `changed=0`, reboot, then checks from outside and inside.
 Instructions and scripts: [tests/integration/vm/README.md](../tests/integration/vm/README.md).
 

@@ -18,7 +18,7 @@ root-attested inventory or proof of application consistency for other engines.
 
 ## Registered quiescent data capture
 
-`steward-host backup-capture PROJECT` adds an operator-only executor action. A
+`opstend-host backup-capture PROJECT` adds an operator-only executor action. A
 project must explicitly set `maintenance.allow_backup_pause: true` and have a
 persistent data mount. The executor uses only the registered project's fixed data
 directory, under the same project lock as restarts. It records the root registry's
@@ -58,10 +58,10 @@ or a pause lasting over five minutes produce high-priority findings. Root audit
 pause/resume events enter the collector with immediate delivery classification.
 These are lifecycle events, not proof of successful upload or restore.
 
-An operator may run `steward-host backup-recover PROJECT` to retry recovery
+An operator may run `opstend-host backup-recover PROJECT` to retry recovery
 explicitly, including while the automatic kill switch is on. If the contract
 changed, it refuses to resume the old workload. After reconciling the workload
-with its current contract, `steward-host backup-recover PROJECT --accept-current`
+with its current contract, `opstend-host backup-recover PROJECT --accept-current`
 can acknowledge the pending intent without starting anything. The project user
 and unit must still match; a desired-running workload must already be active,
 and a desired-stopped workload must pass the quiescence probe. Raw captures are
@@ -91,7 +91,7 @@ They do not establish managed-VM or off-site backup acceptance.
 
 ## Protected capture export
 
-`steward-host backup-export PROJECT ARTIFACT --capture-id CAPTURE_SHA256`
+`opstend-host backup-export PROJECT ARTIFACT --capture-id CAPTURE_SHA256`
 publishes one exact completed capture from the executor's private spool to
 `/var/lib/steward-backup-import/PROJECT/ARTIFACT`. This operator-only action accepts
 registered identifiers and a bound capture ID, not source/destination paths.
@@ -333,7 +333,7 @@ Standalone worker mode is outside this managed cancellation contract.
 ## Cancelled import retirement
 
 An operator may separately acknowledge removal of a cancelled, old import with
-`steward-host backup-import-purge PROJECT ARTIFACT --capture-id ID
+`opstend-host backup-import-purge PROJECT ARTIFACT --capture-id ID
 --acknowledge-import-removal`. The root executor requires the service stopped,
 the matching root registration and cancellation, an intact root capture, an
 exclusive import lock and the seven-day/two-newest retention protections. It
@@ -366,7 +366,7 @@ five-minute host limit and all independent retention checks.
 
 ## Historical cancellation reconciliation
 
-The operator-only `steward-host backup-cancellation-forget PROJECT ARTIFACT
+The operator-only `opstend-host backup-cancellation-forget PROJECT ARTIFACT
 --capture-id ID --acknowledge-forget` reconciles a historical cancellation record
 only after the executor verifies that the fixed backup service is stopped and that
 no matching or ambiguous capture, import, registration, acknowledgement, pause,
@@ -457,7 +457,7 @@ uses bounded pages and fails closed if the snapshot changes between pages.
 ## Backup evidence views
 
 The authenticated `GET /api/backups` endpoint, Backups page, read-only bot
-`/backups` command and root `steward-host backup-status` command consume the
+`/backups` command and root `opstend-host backup-status` command consume the
 same bounded controller-snapshot projection. The API supports a project filter;
 the bot applies the caller's project grants before constructing output. Missing
 or stale controller data stays unknown or explicitly historical, and disabled
@@ -472,7 +472,7 @@ capture request and restore-drill entry points below.
 
 ## Operator request for a scheduled capture
 
-`steward backup --config FILE --limit SERVER --project PROJECT` is wired through
+`opstend backup --config FILE --limit SERVER --project PROJECT` is wired through
 an Ansible `argv` invocation of the root host command and the registered
 `backup_schedule` executor action. The command binds the project and the local
 configuration revision; the executor rejects a different active revision and

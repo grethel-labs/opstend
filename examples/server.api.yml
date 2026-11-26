@@ -1,4 +1,4 @@
-# Server Deploy Toolkit - example configuration, entry profile "api".
+# OpsTend - example configuration, entry profile "api".
 # Copy to config/server.yml (config/ is ignored by git) and adjust.
 schema_version: 1
 

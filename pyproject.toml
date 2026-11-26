@@ -1,7 +1,7 @@
 [project]
 name = "steward"
 version = "0.1.0rc1"
-description = "Server Deploy Toolkit: self-hosted hardening, workload isolation and guarded automation for Linux servers"
+description = "OpsTend: self-hosted hardening, workload isolation and guarded automation for Linux servers"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
@@ -13,10 +13,28 @@ dependencies = [
     "uvicorn>=0.32",
 ]
 
+[project.urls]
+Repository = "https://github.com/grethel-labs/opstend"
+Documentation = "https://github.com/grethel-labs/opstend/tree/main/docs"
+
 [project.optional-dependencies]
 controller = ["ansible-core>=2.20,<2.21"]
 
 [project.scripts]
+opstend = "steward.cli.main:main"
+opstend-host = "steward.hostcli:main"
+opstend-api = "steward.api.server:main"
+opstend-executor = "steward.executor.server:main"
+opstend-controller = "steward.controller:main"
+opstend-collector = "steward.collector:main"
+opstend-notifier = "steward.notifier:main"
+opstend-bot = "steward.bot:main"
+opstend-scan = "steward.scanner:main"
+opstend-scannerd = "steward.scannerd:main"
+opstend-backup = "steward.backup:main"
+opstend-backupd = "steward.backupworker:main"
+
+# Existing host units and operator scripts use these entry points.
 steward = "steward.cli.main:main"
 steward-host = "steward.hostcli:main"
 steward-api = "steward.api.server:main"

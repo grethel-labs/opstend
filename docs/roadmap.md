@@ -21,5 +21,5 @@ pick up a card and record its checks.
 
 The [post-RC1 roadmap](post-rc1.md) orders milestones M9–M15 for native Proxmox
 management, fleet operations, backup and recovery, topology views, Proxmox HA
-and Steward HA. The [infrastructure design](plans/infrastructure-design/README.md)
+and OpsTend HA. The [infrastructure design](plans/infrastructure-design/README.md)
 contains the reference profile and follow-up studies.

@@ -1,4 +1,4 @@
-# Server Deploy Toolkit - quick start with private LAN administration.
+# OpsTend - quick start with private LAN administration.
 # Copy to config/server.yml (config/ is ignored by git) and adjust.
 schema_version: 1
 

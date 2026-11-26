@@ -659,7 +659,7 @@ def test_hostile_archive_members_are_rejected(signed, tmp_path, kind):
     out, key, _ = signed
     archive = tmp_path / "r.tar.gz"
     release.pack_release(out, archive)
-    top = "steward-release-0.1.0.dev0"
+    top = "opstend-release-0.1.0.dev0"
 
     def edit(members):
         yield from members

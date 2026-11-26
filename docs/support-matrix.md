@@ -36,7 +36,7 @@ acceptance remain open. See [card state](STATUS.md#card-state).
 ## Controller machine
 
 Signed deployment uses a separately trusted controller checkout at the matching
-Steward version and an independently obtained release public key. These rows
+OpsTend version and an independently obtained release public key. These rows
 record source and bootstrap evidence. See the [signed deployment process](release.md#deploy-a-signed-archive).
 
 | System | Status |

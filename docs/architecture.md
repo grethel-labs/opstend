@@ -73,7 +73,7 @@ requirements/              Hash-locked controller dependencies
 - The API imports the root-owned `desired.json` as the applied revision. A
   browser save checks the expected predecessor and creates a pending head.
   A concurrent change returns HTTP 409.
-- The UI or `steward config apply --head FULL_REVISION` can apply a reviewed
+- The UI or `opstend config apply --head FULL_REVISION` can apply a reviewed
   head through the executor when only eligible maintenance/project settings
   change and the other generated Ansible inputs stay identical. The installed
   release, expected head and applied revision bind the operation. Pull the
@@ -208,7 +208,7 @@ query roles. The collector owns ingestion and durable cursors.
 
 ## Versioned contracts
 
-See [Extending Steward](extending.md) for versioned adapter contracts and their
+See [Extending OpsTend](extending.md) for versioned adapter contracts and their
 tests. The Ubuntu 26.04 target check lives in preflight. The
 [support matrix](support-matrix.md) records the tested platforms.
 

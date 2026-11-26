@@ -511,7 +511,7 @@ def finalize_release(
 
 def pack_release(release_dir: Path, output: Path) -> str:
     """Deterministic tar.gz of a release directory. Returns its sha256."""
-    top = f"steward-release-{json.loads((release_dir / MANIFEST).read_bytes())['version']}"
+    top = f"opstend-release-{json.loads((release_dir / MANIFEST).read_bytes())['version']}"
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT) as tar:
         for path in sorted(release_dir.rglob("*")):
@@ -1047,7 +1047,7 @@ def sign_release_archive(
                 _check_release_content(root, manifest, False, report)
                 if not report.ok:
                     raise ReleaseError("\n".join(report.errors))
-                top = f"steward-release-{report.version}"
+                top = f"opstend-release-{report.version}"
                 if (
                     not _safe_relative(report.version)
                     or "/" in report.version

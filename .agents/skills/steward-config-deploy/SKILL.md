@@ -1,6 +1,6 @@
 ---
 name: steward-config-deploy
-description: Change Steward configuration, canonical revisions, generated host artifacts, or the guarded CLI and Ansible deploy path. Use for schema, SSH trust, firewall, Quadlet, systemd and application boot changes.
+description: Change OpsTend configuration, canonical revisions, generated host artifacts, or the guarded CLI and Ansible deploy path. Use for schema, SSH trust, firewall, Quadlet, systemd and application boot changes.
 ---
 
 # Configuration and deployment

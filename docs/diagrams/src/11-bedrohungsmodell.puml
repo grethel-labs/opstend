@@ -1,6 +1,6 @@
 @startmindmap
 title Bedrohungsmodell nach Schutzgut (T1–T22)
-* Steward
+* OpsTend
 ** Host-Kontrolle
 *** T3 API-Kompromittierung\nExecutor prüft Rolle + Policy selbst
 *** T13 Aussperrung\nRollback-Timer 180 s

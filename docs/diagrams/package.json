@@ -1,5 +1,5 @@
 {
-  "name": "steward-docs-diagrams",
+  "name": "opstend-docs-diagrams",
   "private": true,
   "description": "Renders docs/diagrams/src/*.puml with excaliplant",
   "scripts": {

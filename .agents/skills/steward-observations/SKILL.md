@@ -1,6 +1,6 @@
 ---
 name: steward-observations
-description: Change Steward scanner findings, inventory or threat intelligence, scanner or collector query IPC, event projection, notifier delivery or signed read-only bot queries.
+description: Change OpsTend scanner findings, inventory or threat intelligence, scanner or collector query IPC, event projection, notifier delivery or signed read-only bot queries.
 ---
 
 # Observations and messaging

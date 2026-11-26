@@ -33,7 +33,7 @@ Workload-Funktionen prüfen cgroup-Delegation, erlaubte User Namespaces,
 Mount- und Netzwerkverhalten gesondert. Der Gastanbieter kann einzelne
 Fähigkeiten einschränken. Ubuntu dokumentiert den Wegfall seiner
 cgroup-v1-Kompatibilität in systemd 259.
-[Steward Support-Matrix](../../support-matrix.md) ·
+[OpsTend Support-Matrix](../../support-matrix.md) ·
 [Ubuntu 26.04 LTS Systemänderungen](https://documentation.ubuntu.com/release-notes/26.04/changes-since-previous-interim/)
 
 | Vorgeschlagene Rolle | Erwartete Daten oder Funktion | Freigabekriterium |

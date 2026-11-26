@@ -84,7 +84,7 @@ setup, API/status/UI; **new** auth lifecycle tests.
 1. For each subscription path, first record dated official evidence that this
    unattended server integration is supported. If it is unsupported or unclear,
    leave that method unavailable with a precise reason; API/local methods work.
-2. Implement controller `steward ai login` as SSH into the same root-owned host
+2. Implement controller `opstend ai login` as SSH into the same root-owned host
    login entry point. Run the official unmodified auth program under the inference
    identity; protect its required native state. No session-token forwarding or
    unofficial OAuth proxy, and no credentials in working copies.

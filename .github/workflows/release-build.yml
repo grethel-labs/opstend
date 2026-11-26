@@ -9,7 +9,8 @@ permissions:
 jobs:
   build:
     if: >-
-      github.repository == 'grethel-labs/server-deploy-toolkit' &&
+      github.repository_id == '1458084857' &&
+      github.repository_owner == 'grethel-labs' &&
       github.event_name == 'workflow_dispatch' &&
       github.ref_type == 'branch' &&
       github.ref_protected == true &&
@@ -28,7 +29,8 @@ jobs:
         run: |
           set -euo pipefail
           export LC_ALL=C
-          if [[ "${GITHUB_REPOSITORY:-}" != grethel-labs/server-deploy-toolkit ||
+          if [[ "${GITHUB_REPOSITORY_ID:-}" != 1458084857 ||
+                "${GITHUB_REPOSITORY_OWNER:-}" != grethel-labs ||
                 "${GITHUB_EVENT_NAME:-}" != workflow_dispatch ||
                 "${GITHUB_REF_TYPE:-}" != branch ||
                 "${GITHUB_REF_PROTECTED:-}" != true ||
@@ -120,11 +122,11 @@ jobs:
           .venv/bin/python -m steward.cli.main release build
           mkdir -p dist/candidate
           .venv/bin/python -m steward.cli.main release pack \
-            --output dist/candidate/steward-release-unsigned.tar.gz
+            --output dist/candidate/opstend-release-unsigned.tar.gz
           .venv/bin/python .github/release/verify_candidate.py \
-            dist/candidate/steward-release-unsigned.tar.gz "$RUNNER_TEMP/host.txt"
-          test -s dist/candidate/steward-release-unsigned.tar.gz
-          test -s dist/candidate/steward-release-unsigned.tar.gz.sha256
+            dist/candidate/opstend-release-unsigned.tar.gz "$RUNNER_TEMP/host.txt"
+          test -s dist/candidate/opstend-release-unsigned.tar.gz
+          test -s dist/candidate/opstend-release-unsigned.tar.gz.sha256
           test -s dist/candidate/receipt.json
           status=$(git status --porcelain=v1 --untracked-files=all)
           test -z "$status"
@@ -133,10 +135,10 @@ jobs:
         id: candidate
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: steward-release-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          name: opstend-release-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            dist/candidate/steward-release-unsigned.tar.gz
-            dist/candidate/steward-release-unsigned.tar.gz.sha256
+            dist/candidate/opstend-release-unsigned.tar.gz
+            dist/candidate/opstend-release-unsigned.tar.gz.sha256
             dist/candidate/receipt.json
           if-no-files-found: error
           overwrite: false

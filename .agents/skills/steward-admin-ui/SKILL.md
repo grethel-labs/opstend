@@ -1,6 +1,6 @@
 ---
 name: steward-admin-ui
-description: Change the Steward React admin interface, FastAPI routes, session security, pending config editor and apply flow, or authenticated advice and AI settings screens.
+description: Change the OpsTend React admin interface, FastAPI routes, session security, pending config editor and apply flow, or authenticated advice and AI settings screens.
 ---
 
 # Admin API and UI

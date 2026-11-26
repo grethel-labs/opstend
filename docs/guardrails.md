@@ -1,4 +1,4 @@
-# Steward guardrails
+# OpsTend guardrails
 
 These contracts apply to changes in the corresponding systems. CI runs the
 listed test functions in parallel before host tooling is installed. After this

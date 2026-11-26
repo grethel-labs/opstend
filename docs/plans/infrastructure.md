@@ -1,4 +1,4 @@
-# Karten für Server, Geräte, Steward HA und RC2
+# Karten für Server, Geräte, OpsTend HA und RC2
 
 Reihenfolge, Budgets und Referenzaufbau stehen im
 [Plan nach RC1](../post-rc1.md). Der erste Gerätekatalog fokussiert die

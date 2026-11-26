@@ -1,4 +1,4 @@
-# Steward documentation
+# OpsTend documentation
 
 Start with the [installation quick start](../README.md#quick-start), the
 [support matrix](support-matrix.md) for tested platforms, and
@@ -15,13 +15,13 @@ gates. STATUS records the evidence for each card as it lands.
 | Build or verify a toolkit release | [Release process](release.md) |
 | Report a security issue | [Security policy](../SECURITY.md) |
 
-## Understand or change Steward
+## Understand or change OpsTend
 
 | If you need to | Read |
 |---|---|
 | Trace components, trust boundaries or host state | [Architecture](architecture.md) · [Diagram gallery](diagrams/README.md) |
 | Find a component's skill and code entry points | [Working guide](working-guide.md) · [Agent instructions](../AGENTS.md) |
-| Extend an executor action, adapter or service | [Extending Steward](extending.md) · [Contribution rules](../CONTRIBUTING.md) |
+| Extend an executor action, adapter or service | [Extending OpsTend](extending.md) · [Contribution rules](../CONTRIBUTING.md) |
 | Choose a check or understand the security and CI contracts | [Testing](testing.md) · [Threat model](threat-model.md) · [Guardrails](guardrails.md) · [Working guidelines](working-guidelines.md) |
 | Find the design decision behind a boundary | [Architecture decision records](adr/) |
 

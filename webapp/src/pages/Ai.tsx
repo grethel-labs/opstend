@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import type { PageProps } from "../App";
 import { ApiError, request } from "../api";
 import { Badge, Problem, time, useLoad } from "../hooks";
+import { Zorec, type ZorecGesture } from "../Zorec";
 
 interface ProviderOption {
   id: string;
@@ -37,6 +38,25 @@ interface AiView {
 }
 
 const KEY_REFERENCE = /^(?:env:[A-Za-z_][A-Za-z0-9_]*|file:[^\x00\r\n]+)$/;
+
+function onboardingGesture(
+  view: AiView | null, { editing, error, saving }: { editing: boolean; error: boolean; saving: boolean },
+): ZorecGesture {
+  if (error) return "failed";
+  if (saving || view?.pending_provider?.status === "pending") return "verifying";
+  if (editing) return "setup";
+  if (view?.pending_provider?.status === "failed") return "failed";
+  if (!view) return "neutral";
+  if (!view.provider) return "setup";
+
+  const inProgress = view.requests.find(item => item.state === "pending" || item.state === "running");
+  if (inProgress?.kind === "scan") return "scanning";
+  if (view.status === "awaiting_download") return "awaiting-download";
+  if (inProgress) return "thinking";
+  if (view.status === "scanned") return view.scanned?.models.length ? "selection" : "missing-data";
+  if (!view.provider.runtime_enabled) return "offline";
+  return view.status === "ready" ? "ready" : "neutral";
+}
 
 function ProviderForm({
   options, provider, saving, onSave, onCancel, onError,
@@ -204,9 +224,38 @@ export function AiPage({ onAuthLost }: PageProps) {
   const local = provider?.id === "ollama-local" ? view?.local_download : null;
   const choosingInitial = view?.status === "provider_chosen" || view?.status === "scanned";
   const scanQueued = view?.requests.some(item => item.kind === "scan" && ["pending", "running"].includes(item.state));
+  const gesture = onboardingGesture(view ?? null, {
+    editing: !!(view && edit && !staleEdit),
+    error: !!(loaded.error || message || staleEdit),
+    saving: savingProvider,
+  });
   return (
     <>
-      <p className="muted">AI is optional. Deterministic features run independently.</p>
+      <section className="card zorec-panel" aria-labelledby="ai-features-heading">
+        <div className="zorec-heading">
+          <Zorec gesture={gesture} />
+          <div>
+            <h2 id="ai-features-heading">What Zorec adds</h2>
+            <p className="muted">
+              Saving a provider records your setup. These features require an enabled AI runtime on the server.
+            </p>
+          </div>
+        </div>
+        <ul className="zorec-features">
+          <li>
+            <strong>Advice in Overview.</strong> Ask about service health, backup status, or vulnerability findings.
+            Answers show sources, the time range, and gaps in the data. Suggested actions require the usual approval.
+          </li>
+          <li>
+            <strong>Bot advice.</strong> Use <code>/ask</code> to ask questions using the host and project information
+            you are authorized to access.
+          </li>
+          <li>
+            <strong>Model evaluation and selection.</strong> Review model test reports, pin a model, or opt into
+            automatic selection within your provider where supported.
+          </li>
+        </ul>
+      </section>
       <Problem loaded={loaded} />
       {message && <p className="error" role="alert">{message}</p>}
       {view && (
@@ -296,8 +345,8 @@ export function AiPage({ onAuthLost }: PageProps) {
           )}
           {view.requests.length > 0 && (
             <>
-              <h2>Recent AI requests</h2>
-              <ul aria-label="Recent AI requests">
+              <h2>Recent Zorec requests</h2>
+              <ul aria-label="Recent Zorec requests">
                 {view.requests.map(item => (
                   <li key={item.id}>
                     {item.kind} — {item.state === "pending" ? "queued (pending)" : item.state}

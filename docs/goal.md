@@ -84,7 +84,7 @@ Implementation and host acceptance are separate activities with separate owners.
 | Role | Does | Never does |
 |---|---|---|
 | **Implementation lane** (one git worktree + branch per card group) | Code, unit/contract tests, focused local checks, one commit per card step on its lane branch | Touch any VM, run the full suite locally, edit another lane's files beyond a merge-trivial hunk, push |
-| **Isolated CI runner** | Runs the full suite, ruff and ansible-lint for a given worktree/commit in parallel (`pytest -n`) | Hold secrets, deploy Steward |
+| **Isolated CI runner** | Runs the full suite, ruff and ansible-lint for a given worktree/commit in parallel (`pytest -n`) | Hold secrets, deploy OpsTend |
 | **Acceptance VMs** | Run a milestone's gate script against a committed, merged commit; reset between runs | Run unmerged lane code |
 | **Retention fixture** | Long-lived guest reserved for B08 retention gates | Be used for per-feature experiments |
 | **Parent** | Merges lane branches in dependency order, regenerates the schema after config merges, runs the full suite on the runner, commits, hands the merged commit to the acceptance lane, updates `STATUS.md` | Implement features itself while lanes run |

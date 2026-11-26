@@ -16,7 +16,8 @@ from test_release import COMMIT, make_release
 from test_release import source_tree as source_tree
 
 ROOT = Path(__file__).resolve().parents[1]
-REPOSITORY = "grethel-labs/server-deploy-toolkit"
+REPOSITORY_ID = "1458084857"
+REPOSITORY_OWNER = "grethel-labs"
 DEFAULT_BRANCH = "trunk"
 
 
@@ -33,7 +34,8 @@ def test_release_job_structure(workflow):
     assert set(workflow["jobs"]) == {"build"}
     job = workflow["jobs"]["build"]
     assert job["if"] == (
-        f"github.repository == '{REPOSITORY}' && "
+        f"github.repository_id == '{REPOSITORY_ID}' && "
+        f"github.repository_owner == '{REPOSITORY_OWNER}' && "
         "github.event_name == 'workflow_dispatch' && "
         "github.ref_type == 'branch' && github.ref_protected == true && "
         "github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && "
@@ -65,11 +67,11 @@ def test_release_job_structure(workflow):
     assert upload["with"]["if-no-files-found"] == "error"
     assert upload["with"]["overwrite"] is False
     assert upload["with"]["name"] == (
-        "steward-release-unsigned-${{ github.run_id }}-${{ github.run_attempt }}"
+        "opstend-release-unsigned-${{ github.run_id }}-${{ github.run_attempt }}"
     )
     assert upload["with"]["path"].splitlines() == [
-        "dist/candidate/steward-release-unsigned.tar.gz",
-        "dist/candidate/steward-release-unsigned.tar.gz.sha256",
+        "dist/candidate/opstend-release-unsigned.tar.gz",
+        "dist/candidate/opstend-release-unsigned.tar.gz.sha256",
         "dist/candidate/receipt.json",
     ]
 
@@ -96,9 +98,7 @@ def test_release_job_structure(workflow):
         pytest.param(
             {"GITHUB_EVENT_NAME": "pull_request"}, DEFAULT_BRANCH, False, id="pull-request"
         ),
-        pytest.param(
-            {"GITHUB_REPOSITORY": "fork/server-deploy-toolkit"}, DEFAULT_BRANCH, False, id="fork"
-        ),
+        pytest.param({"GITHUB_REPOSITORY_ID": "123456789"}, DEFAULT_BRANCH, False, id="fork"),
         pytest.param({}, None, False, id="missing-default-branch"),
         pytest.param(
             {"GITHUB_REF_PROTECTED": None}, DEFAULT_BRANCH, False, id="missing-protection"
@@ -113,13 +113,14 @@ def test_release_ref_step(workflow, tmp_path, overrides, default_branch, allowed
     if not bash:
         pytest.skip("executing the runner step requires bash")
     event_path = tmp_path / "event.json"
-    repository = {"full_name": overrides.get("GITHUB_REPOSITORY", REPOSITORY)}
+    repository = {}
     if default_branch is not None:
         repository["default_branch"] = default_branch
     event_path.write_text(json.dumps({"repository": repository}))
     env = {
         "PATH": os.environ["PATH"],
-        "GITHUB_REPOSITORY": REPOSITORY,
+        "GITHUB_REPOSITORY_ID": REPOSITORY_ID,
+        "GITHUB_REPOSITORY_OWNER": REPOSITORY_OWNER,
         "GITHUB_EVENT_NAME": "workflow_dispatch",
         "GITHUB_REF_TYPE": "branch",
         "GITHUB_REF_PROTECTED": "true",

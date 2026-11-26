@@ -1,6 +1,6 @@
 ---
 name: steward-lifecycle
-description: Change Steward self-healing, application group operations, maintenance windows, verified updates and rollback, critical-risk containment, archival, reactivation or drills.
+description: Change OpsTend self-healing, application group operations, maintenance windows, verified updates and rollback, critical-risk containment, archival, reactivation or drills.
 ---
 
 # Workload lifecycle

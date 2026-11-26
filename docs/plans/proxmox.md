@@ -155,7 +155,7 @@ Zielkapazität und ein blockierter Gast lösen keinen weiteren Schritt aus.
 1. Prüfe die in PH01 definierte Fencing-Kette bei Ausfall eines PVE-Hosts.
    Erfasse PVE-Quorum, Fencing-Ereignis, Gastplatzierung, Wiederanlaufzeit
    und Nutzdaten-Lesetest. PVE entscheidet über den neuen Start, und
-   Steward verfolgt den Übergang in der Oberfläche.
+   OpsTend verfolgt den Übergang in der Oberfläche.
 2. Prüfe eine Netzpartition mit Mehrheits- und Minderheitsseite, gefolgt
    von Quorumverlust oder fehlendem Storage im Testprofil. Die Steuerung
    zeigt die beobachtete Ursache, sperrt passende Schreibpfade und gleicht
@@ -163,7 +163,7 @@ Zielkapazität und ein blockierter Gast lösen keinen weiteren Schritt aus.
    Gast erhält einen expliziten Hinweis auf den vorbereiteten Restore-Pfad.
 3. Bringe den ausgefallenen Knoten zurück. Prüfe, dass Gäste und deren
    beobachtete Instanz eindeutig bleiben und dass eine Rückkehr nicht
-   eigenmächtig einen durch Steward veranlassten Gaststart auslöst.
+   eigenmächtig einen durch OpsTend veranlassten Gaststart auslöst.
    Abweichende RPO/RTO-Werte werden mit Ursache erfasst.
 
 **Check/done**: Physische Fencing-/Quorum-Abnahme mit aufgezeichneten

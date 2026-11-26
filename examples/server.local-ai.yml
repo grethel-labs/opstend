@@ -1,4 +1,4 @@
-# Server Deploy Toolkit - example configuration, entry profile "local-ai".
+# OpsTend - example configuration, entry profile "local-ai".
 # Candidate reference for A02 acceptance. See docs/implementation-plan.md.
 schema_version: 1
 

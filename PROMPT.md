@@ -1,4 +1,4 @@
-# Umsetzungsprompt für Server Deploy Toolkit
+# Umsetzungsprompt für OpsTend
 
 Der folgende Auftrag ist eigenständig kopierbar. Befehle und Felder im Auftrag
 beschreiben das zu entwickelnde Produkt, keine bereits verfügbare Software.
@@ -6,7 +6,7 @@ beschreiben das zu entwickelnde Produkt, keine bereits verfügbare Software.
 ---
 
 Du entwickelst ein echtes, wartbares Open-Source-Projekt für GitHub mit dem
-Namen **Server Deploy Toolkit**. Liefere lauffähigen Code, Tests, Ansible-Deployment,
+Namen **OpsTend**. Liefere lauffähigen Code, Tests, Ansible-Deployment,
 Dokumentation und Releasevorbereitung. Arbeite in überprüfbaren Etappen und führe
 eine ehrliche Liste implementierter, geprüfter und noch offener Funktionen.
 Ein Gerüst, eine Demooberfläche mit erfundenen Daten oder eine Wartungsseite ist
@@ -290,7 +290,7 @@ Controllerumgebung auf den Server.
 Liefere aus einem überprüfbaren Release diesen tatsächlichen Einstieg:
 
 ```bash
-./steward deploy --config ./config/server.yml --limit my-server
+./opstend deploy --config ./config/server.yml --limit my-server
 ```
 
 Der Bootstrap richtet eine gepinnte Controllerumgebung und Ansible-Collections
