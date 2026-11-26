@@ -166,14 +166,25 @@ class Onboarding:
             self._prune_private_keys(self._load(db))
 
     @contextmanager
-    def control(self):
+    def control(self, *, remaining: Callable[[], float] | None = None):
         """Serialize short control changes and publication across processes."""
         if getattr(self._control_owner, "held", False):
             yield
             return
         fd = os.open(self.base / ".control.lock", os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            if remaining is None:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            else:
+                while (left := remaining()) > 0:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        time.sleep(min(0.01, left))
+                    else:
+                        break
+                else:
+                    raise TimeoutError
             self._control_owner.held = True
             yield
         finally:
@@ -1065,6 +1076,7 @@ def evaluate_model(
     share: frozenset[str] = frozenset(),
     clock: Callable[[], float] = time.time,
     monotonic: Callable[[], float] = time.monotonic,
+    remaining: Callable[[], float] | None = None,
 ) -> dict[str, Any]:
     """Run the fixed synthetic suite against one provider and return a report body.
 
@@ -1084,7 +1096,9 @@ def evaluate_model(
     now = clock()
     for case in cases(now):
         n += 1
-        outcome = service.run(case.task, list(case.items), scope(now))
+        # Translate the caller's remaining budget to the inference service's clock.
+        deadline = time.monotonic() + remaining() if remaining is not None else None
+        outcome = service.run(case.task, list(case.items), scope(now), deadline=deadline)
         tokens, cost = account_usage(outcome.usage, price, tokens, cost)
         if outcome.ok and outcome.data is not None:
             schema_ok += 1

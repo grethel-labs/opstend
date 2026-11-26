@@ -141,6 +141,8 @@ class _Base:
                 check_admission()
             try:
                 conn.connect()
+            except TimeoutError:
+                raise TransportError("connect_timeout") from None
             except (OSError, http.client.HTTPException):
                 raise TransportError("connect") from None
             try:
@@ -348,7 +350,7 @@ class ManagedPrivateHttpsTransport(_Base):
         *,
         ca_pem: str | bytes | None = None,
         check_admission: Callable[[], None] | None = None,
-        send_guard: Callable[[], contextlib.AbstractContextManager[None]] | None = None,
+        send_guard: Callable[[float], contextlib.AbstractContextManager[None]] | None = None,
     ):
         self._base_url = canonical_private_https_url(base_url)
         self._endpoint = Endpoint.from_url(self._base_url)
@@ -377,6 +379,7 @@ class ManagedPrivateHttpsTransport(_Base):
             raise TransportError("connect")
         deadline = time.monotonic() + timeout
         conn = _ManagedPrivateHttpsConnection(endpoint, self._socket_path, self._context, deadline)
+        send_guard = self._send_guard
         response = self._exchange(
             conn,
             endpoint.prefix + path,
@@ -385,7 +388,7 @@ class ManagedPrivateHttpsTransport(_Base):
             body,
             deadline,
             check_admission=self._check_admission,
-            send_guard=self._send_guard,
+            send_guard=None if send_guard is None else lambda: send_guard(deadline),
         )
         # Older HTTPS gateways use EOF to delimit a JSON response. TLS still
         # authenticates every received record, and only a complete object may
@@ -462,6 +465,8 @@ class _HttpProvider:
         except TransportError as exc:
             if exc.kind == "connect":
                 raise InferenceError("unavailable", retryable=True, spend="none") from None
+            if exc.kind == "connect_timeout":
+                raise InferenceError("timeout", retryable=True, spend="none") from None
             if exc.kind == "unsafe":
                 raise InferenceError("policy_denied", spend="none") from None
             if exc.kind == "timeout":

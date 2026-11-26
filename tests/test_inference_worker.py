@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -13,10 +14,14 @@ from pathlib import Path
 import pytest
 
 from steward import inference_worker
+from steward.adapters.inference import HttpResponse, TransportError
+from steward.core.config import Ai, AiBudget
 from steward.core.inference import InferenceError, RawCompletion, Usage
 from steward.core.inference_budget import Ledger
+from steward.core.inference_deployment import CandidatePolicy, PrivateProviderPolicy
 from steward.core.model_selection import SelectionStore
 from steward.core.model_sources import SourceStore
+from steward.core.model_suite import cases, scope
 from steward.inference_worker import AppliedPolicy, build_effective_provider, run_once
 from test_api import app, client  # noqa: F401 (fixtures)
 from test_model_selection import HAIKU, IN_WINDOW, NEXT_WINDOW, SONNET, SPEC, FakeProvider, make_ai
@@ -46,6 +51,174 @@ def test_private_provider_rejects_reflected_credential_after_json_decode(monkeyp
         provider.complete("system", "user", schema={}, max_output_tokens=10, timeout_s=1)
     assert failure.value.error_class == "invalid_output"
     assert failure.value.usage == usage
+
+
+@pytest.mark.parametrize(
+    "operation", ["initial_check", "selection_change", "cold_change", "best_now", "advice"]
+)
+def test_managed_private_timeouts(tmp_path, monkeypatch, operation):
+    budget = AiBudget(monthly={"tokens": 40_000, "seconds": 180})
+    settings = PrivateProviderPolicy(
+        base_url="https://10.0.0.4:9444/v1",
+        budget=budget,
+        evaluation_budget=budget,
+        evaluation_window=SPEC,
+        share=["status"],
+    )
+    candidate = CandidatePolicy(
+        version=1,
+        revision="a" * 64,
+        release="a04-test",
+        wheel_sha256="b" * 64,
+        generation="c" * 32,
+        ai=Ai(),
+        weekly_window=None,
+        private_provider=settings,
+        advice=True,
+    )
+    monkeypatch.setattr(
+        inference_worker.inference_deployment, "read_candidate_policy", lambda: candidate
+    )
+    monkeypatch.setattr(inference_worker, "read_kill_switch", lambda: False)
+    elapsed = 0.0
+    timeouts = []
+    reservations = []
+    durations = []
+    suite = cases(IN_WINDOW)
+    monkeypatch.setattr(time, "monotonic", lambda: elapsed)
+    reserve = Ledger.reserve
+
+    def track_reservation(ledger, **kwargs):
+        reservations.append(kwargs["seconds"])
+        return reserve(ledger, **kwargs)
+
+    monkeypatch.setattr(Ledger, "reserve", track_reservation)
+
+    def clock():
+        return IN_WINDOW + elapsed
+
+    class PrivateTransport:
+        def __init__(self, *_args, check_admission, **_kwargs):
+            self.check_admission = check_admission
+
+        def request(self, _endpoint, method, path, _headers, body, *, timeout):
+            nonlocal elapsed
+            self.check_admission()
+            if method == "GET":
+                assert path.endswith("/models")
+                return HttpResponse(
+                    200,
+                    {},
+                    json.dumps(
+                        {
+                            "data": [{"id": model} for model in (SONNET, HAIKU)],
+                        }
+                    ).encode(),
+                )
+            assert path.endswith("/chat/completions")
+            case_index = len(timeouts)
+            timeouts.append(timeout)
+            duration = durations[case_index] if durations else 0
+            elapsed += min(duration, timeout)
+            if duration > timeout:
+                raise TransportError("timeout")
+            return HttpResponse(
+                200,
+                {},
+                json.dumps(
+                    {
+                        "model": json.loads(body)["model"],
+                        "choices": [
+                            {"message": {"content": json.dumps(suite[case_index].expected)}}
+                        ],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 5},
+                    }
+                ).encode(),
+            )
+
+    monkeypatch.setattr(inference_worker, "ManagedPrivateHttpsTransport", PrivateTransport)
+    onboarding = inference_worker._onboarding(tmp_path, clock)
+
+    def tick():
+        result = run_once(
+            read_policy=inference_worker._read_candidate,
+            candidate_policy=inference_worker._read_candidate(),
+            state_dir=tmp_path,
+            kill_switch=inference_worker.read_kill_switch,
+            clock=clock,
+            monotonic=lambda: elapsed,
+        )
+        assert result["status"] == "ok"
+        return result["requests"]
+
+    onboarding.stage_private_provider(
+        settings.base_url,
+        "fixture-key",
+        expected_choice_id=None,
+        replace=False,
+        generation=candidate.generation,
+    )
+    tick()
+    onboarding.pick_initial(SONNET)
+    if operation != "initial_check":
+        onboarding.request_action("initial_check")
+        assert tick()[0]["result"] == "complete"
+        timeouts.clear()
+        reservations.clear()
+
+    if operation == "advice":
+        durations[:] = [19]
+        advice_dir = tmp_path / "advice"
+        advice_dir.mkdir(mode=0o700)
+        # Leave enough caller time to measure the provider's own advice limit.
+        outcome = inference_worker._run_managed_advice(
+            advice_dir,
+            list(suite[0].items),
+            scope(clock()),
+            ("controller",),
+            time.monotonic() + 60,
+        )
+        assert timeouts == [8.0]
+        assert outcome.error_class == "timeout"
+        return
+
+    # The cold call succeeds, leaving 11 seconds for a call that needs 12.
+    durations[:] = [12, 4, 3] if operation == "cold_change" else [19, 12]
+    if operation in ("selection_change", "cold_change"):
+        onboarding.pin(HAIKU)
+    onboarding.request_action("best_now" if operation == "best_now" else "initial_check")
+    requests = tick()
+    assert timeouts == reservations
+    if operation == "cold_change":
+        assert requests[0]["result"] == "complete"
+        assert onboarding.latest_report()["body"]["passed"] is True
+        assert elapsed == 19.0
+        return
+    assert timeouts == [20.0, 11.0]
+    assert elapsed == 30.0
+    if operation == "best_now":
+        assert requests[0]["result"] == "selection_deadline"
+    else:
+        assert requests[0]["result"] == "incomplete"
+        report = onboarding.view()["report"]
+        assert report["reason"] == operation
+        assert report["model"] == (HAIKU if operation == "selection_change" else SONNET)
+        assert report["body"]["error"] == "timeout"
+
+
+def test_private_send_lock_stops_waiting_at_deadline(tmp_path, monkeypatch):
+    first = inference_worker._onboarding(tmp_path, time.time)
+    second = inference_worker._onboarding(tmp_path, time.time)
+    remaining = iter((0.003, 0.0))
+    waits = []
+    monkeypatch.setattr(time, "sleep", waits.append)
+    with (
+        first.control(),
+        pytest.raises(TimeoutError),
+        second.control(remaining=lambda: next(remaining)),
+    ):
+        pytest.fail("the contended send lock was acquired")
+    assert waits == [0.003]
 
 
 class WorkerHarness:

@@ -10,12 +10,13 @@ import pwd
 import re
 import selectors
 import socket
+import sqlite3
 import stat
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import ExitStack, contextmanager, suppress
+from collections.abc import Callable, Collection, Iterator, Mapping
+from contextlib import ExitStack, closing, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
@@ -94,6 +95,7 @@ STATE_DIR = Path("/var/lib/steward-inference")
 MAX_PROJECTION_BYTES = 128 * 1024
 PRIVATE_EVALUATION_WORK = "private_model_evaluation"
 PRIVATE_EVALUATION_SECONDS = 30
+PRIVATE_EVALUATION_CALL_SECONDS = 20
 
 
 @dataclass(frozen=True)
@@ -788,10 +790,15 @@ def _private_guarded_provider(
     model: str,
     guard: Callable[[], str | None],
     remaining: Callable[[], float],
+    *,
+    timeout_s: float = WORKER_TIMEOUT_S,
 ) -> _GuardedProvider:
     def require_admission() -> None:
         if guard() is not None:
             raise InferenceError("policy_denied", spend="none")
+
+    def send_guard(deadline: float):
+        return onboarding.control(remaining=lambda: deadline - time.monotonic())
 
     require_admission()
     key = onboarding.resolve_private_key(key_ref)
@@ -800,15 +807,47 @@ def _private_guarded_provider(
         EGRESS_SOCKET_PATH,
         ca_pem=settings.ca_pem,
         check_admission=require_admission,
-        send_guard=onboarding.control,
+        send_guard=send_guard,
     )
     provider = _PrivateProvider(
-        settings.base_url, model, api_key=key, transport=transport, timeout_s=WORKER_TIMEOUT_S
+        settings.base_url, model, api_key=key, transport=transport, timeout_s=timeout_s
     )
     return _GuardedProvider(provider, guard, remaining)
 
 
 class _PrivateTick(_Tick):
+    def _measure(
+        self,
+        provider: InferenceProvider,
+        budget: AiBudget,
+        share: Collection[str],
+        remaining: Callable[[], float],
+    ) -> dict:
+        try:
+            with closing(
+                Ledger(self.onboarding.base / "private-evaluation.db", budget, remaining=remaining)
+            ) as ledger:
+                body = evaluate_model(
+                    provider,
+                    ledger,
+                    price=_budget_price(budget),
+                    share=frozenset(share),
+                    clock=self.clock,
+                    monotonic=self.monotonic,
+                    remaining=remaining,
+                )
+        except sqlite3.OperationalError as error:
+            if getattr(error, "sqlite_errorcode", 0) & 0xFF not in (
+                sqlite3.SQLITE_BUSY,
+                sqlite3.SQLITE_LOCKED,
+            ):
+                raise
+            # Unsettled usage remains charged by the ledger's expiry rules.
+            return _incomplete(provider.model, "timeout")
+        if remaining() <= 0:
+            body.update(complete=False, passed=False, error="timeout")
+        return body
+
     def _guard(self, policy: AppliedPolicy, state: dict, *, pending: bool = False) -> str | None:
         if self.policy() != policy:
             return "applied_policy_changed"
@@ -882,12 +921,16 @@ class _PrivateTick(_Tick):
         return "ok"
 
     def initial_check(self, row: dict) -> str:
+        mono_end = self.monotonic() + PRIVATE_EVALUATION_SECONDS
         state, policy, _ = self._snapshot(row)
         if policy is None or not _private_matches(policy, state):
             raise OnboardingError("applied_provider_mismatch")
         settings = policy.private_provider
         assert settings is not None
         due = state["report_due"]
+
+        def remaining() -> float:
+            return mono_end - self.monotonic()
 
         def guard() -> str | None:
             return self._guard(policy, state) or (
@@ -897,27 +940,24 @@ class _PrivateTick(_Tick):
         def check(model: str) -> dict:
             if reason := guard():
                 return _incomplete(model, reason)
+            if remaining() <= 0:
+                return _incomplete(model, "timeout")
             budget = settings.evaluation_budget
             if budget is None:
                 return _incomplete(model, "evaluation_budget_unavailable")
             try:
                 provider = _private_guarded_provider(
-                    settings, self.onboarding, state["key_ref"], model, guard, lambda: float("inf")
+                    settings,
+                    self.onboarding,
+                    state["key_ref"],
+                    model,
+                    guard,
+                    remaining,
+                    timeout_s=PRIVATE_EVALUATION_CALL_SECONDS,
                 )
             except (InferenceError, OnboardingError, OSError, ValueError):
                 return _incomplete(model, "provider_validation_failed")
-            ledger = Ledger(self.onboarding.base / "private-evaluation.db", budget)
-            try:
-                return evaluate_model(
-                    provider,
-                    ledger,
-                    price=_budget_price(budget),
-                    share=frozenset(settings.share),
-                    clock=self.clock,
-                    monotonic=self.monotonic,
-                )
-            finally:
-                ledger.close()
+            return self._measure(provider, budget, settings.share, remaining)
 
         report = self.onboarding.ensure_report(check, publish_guard=guard)
         if report is None:
@@ -983,20 +1023,15 @@ class _PrivateTick(_Tick):
         reason = "evaluation_unavailable"
         try:
             provider = _private_guarded_provider(
-                settings, self.onboarding, state["key_ref"], active["model"], guard, remaining
+                settings,
+                self.onboarding,
+                state["key_ref"],
+                active["model"],
+                guard,
+                remaining,
+                timeout_s=PRIVATE_EVALUATION_CALL_SECONDS,
             )
-            ledger = Ledger(self.onboarding.base / "private-evaluation.db", budget)
-            try:
-                evidence |= evaluate_model(
-                    provider,
-                    ledger,
-                    price=_budget_price(budget),
-                    share=frozenset(settings.share),
-                    clock=self.clock,
-                    monotonic=self.monotonic,
-                )
-            finally:
-                ledger.close()
+            evidence |= self._measure(provider, budget, settings.share, remaining)
             reason = guard() or (
                 "comparison_sources_unavailable"
                 if evidence["complete"]

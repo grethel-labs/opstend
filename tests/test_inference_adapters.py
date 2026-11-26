@@ -256,9 +256,10 @@ def test_managed_private_https_over_unix_relay(tmp_path, monkeypatch, case):
             else:
                 with pytest.raises(InferenceError) as exc:
                     provider.list_models(timeout_s=0.15 if case == "stall" else 1)
-                assert exc.value.error_class == (
-                    "unsupported" if case == "redirect" else "unavailable"
-                )
+                assert exc.value.error_class == {
+                    "redirect": "unsupported",
+                    "stall": "timeout",
+                }.get(case, "unavailable")
         finally:
             thread.join(timeout=3)
         assert not thread.is_alive()
@@ -308,8 +309,9 @@ def test_managed_private_https_guards_final_check_and_request_write(tmp_path, mo
     held = False
 
     @contextmanager
-    def hold():
+    def hold(deadline):
         nonlocal held
+        assert deadline > time.monotonic()
         held = True
         try:
             yield

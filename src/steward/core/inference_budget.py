@@ -94,20 +94,36 @@ class Ledger:
         path: Path | str,
         budget: AiBudget,
         rate_guard: Callable[[float], bool] | None = None,
+        remaining: Callable[[], float] | None = None,
     ):
         # rate_guard(now) is False when the exchange rate behind cost limits is stale
         # (decision 7): cost-limited reservations then deny instead of guessing.
         self._path, self.budget, self.rate_guard = str(path), budget, rate_guard
+        self._remaining = remaining
         self._local = threading.local()
-        self._conn().executescript(SCHEMA)
+        try:
+            self._conn().executescript(SCHEMA)
+        except BaseException:
+            self.close()
+            raise
 
     def _conn(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
+        timeout = 10 if self._remaining is None else max(0, min(10, self._remaining()))
         if conn is None:
-            conn = sqlite3.connect(self._path, timeout=10, isolation_level=None)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
+            conn = sqlite3.connect(self._path, timeout=timeout, isolation_level=None)
+            try:
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL")
+            except BaseException:
+                conn.close()
+                raise
             self._local.conn = conn
+        if self._remaining is not None:
+            # Recompute before schema setup or a transaction as the deadline approaches.
+            conn.execute(
+                f"PRAGMA busy_timeout={int(1000 * max(0, min(timeout, self._remaining())))}"
+            )
         return conn
 
     def close(self) -> None:
