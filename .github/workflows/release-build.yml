@@ -1,0 +1,153 @@
+name: Unsigned release candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: >-
+      github.repository == 'grethel-labs/server-deploy-toolkit' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref_type == 'branch' &&
+      github.ref_protected == true &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      github.workflow_sha == github.sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: steward-release-build
+      deployment: false
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check release ref
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          if [[ "${GITHUB_REPOSITORY:-}" != grethel-labs/server-deploy-toolkit ||
+                "${GITHUB_EVENT_NAME:-}" != workflow_dispatch ||
+                "${GITHUB_REF_TYPE:-}" != branch ||
+                "${GITHUB_REF_PROTECTED:-}" != true ||
+                ! "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ||
+                "${GITHUB_SHA:-}" != "${GITHUB_WORKFLOW_SHA:-}" ]]; then
+            echo 'Release dispatch metadata failed admission' >&2
+            exit 1
+          fi
+
+          # Read the complete payload without trimming or interpolating ref data.
+          python3 -I - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          def unique_object(pairs):
+              obj = dict(pairs)
+              if len(obj) != len(pairs):
+                  raise ValueError("duplicate key")
+              return obj
+
+          def invalid_constant(value):
+              raise ValueError("invalid JSON constant")
+
+          try:
+              with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as payload:
+                  event = json.load(
+                      payload, object_pairs_hook=unique_object, parse_constant=invalid_constant
+                  )
+              branch = event["repository"]["default_branch"]
+              if not isinstance(branch, str) or not branch:
+                  raise ValueError("invalid default branch")
+              ref = f"refs/heads/{branch}"
+              if os.environ["GITHUB_REF"] != ref:
+                  raise ValueError("ref differs from the default branch")
+              subprocess.run(["git", "check-ref-format", ref], check=True)
+          except (KeyError, OSError, TypeError, ValueError, RecursionError, subprocess.SubprocessError):
+              raise SystemExit("Release dispatch payload or default branch is invalid") from None
+          PY
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Check clean source checkout
+        run: |
+          head=$(git rev-parse --verify HEAD)
+          status=$(git status --porcelain=v1 --untracked-files=all)
+          test "$head" = "$GITHUB_SHA"
+          test -z "$status"
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.13.8'
+          enable-cache: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.5'
+          package-manager-cache: false
+
+      - name: Check lock and prepare build environment
+        env:
+          UV_PYTHON: '3.12.16'
+          UV_MANAGED_PYTHON: 'true'
+        run: |
+          uv python install "$UV_PYTHON"
+          uv lock --check
+          uv export --frozen --no-dev --extra controller --no-emit-project \
+            --format requirements-txt --output-file "$RUNNER_TEMP/controller.txt" >/dev/null
+          sed '/^[[:space:]]*#/d' "$RUNNER_TEMP/controller.txt" > "$RUNNER_TEMP/controller.actual"
+          sed '/^[[:space:]]*#/d' requirements/controller.txt > "$RUNNER_TEMP/controller.expected"
+          diff -u "$RUNNER_TEMP/controller.expected" "$RUNNER_TEMP/controller.actual"
+          uv export --frozen --no-dev --no-emit-project \
+            --format requirements-txt --output-file "$RUNNER_TEMP/host.txt" >/dev/null
+          uv sync --locked --no-dev --extra controller --no-install-project --no-build
+
+      - name: Build, pack and verify unsigned candidate
+        env:
+          UV_PYTHON: '3.12.16'
+          UV_MANAGED_PYTHON: 'true'
+          UV_BUILD_CONSTRAINT: .github/release/build-constraints.txt
+          UV_REQUIRE_HASHES: 'true'
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          unset STEWARD_RELEASE_SIGNING_KEY_REF
+          .venv/bin/python -m steward.cli.main release build
+          mkdir -p dist/candidate
+          .venv/bin/python -m steward.cli.main release pack \
+            --output dist/candidate/steward-release-unsigned.tar.gz
+          .venv/bin/python .github/release/verify_candidate.py \
+            dist/candidate/steward-release-unsigned.tar.gz "$RUNNER_TEMP/host.txt"
+          test -s dist/candidate/steward-release-unsigned.tar.gz
+          test -s dist/candidate/steward-release-unsigned.tar.gz.sha256
+          test -s dist/candidate/receipt.json
+          status=$(git status --porcelain=v1 --untracked-files=all)
+          test -z "$status"
+
+      - name: Upload verified candidate
+        id: candidate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: steward-release-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/candidate/steward-release-unsigned.tar.gz
+            dist/candidate/steward-release-unsigned.tar.gz.sha256
+            dist/candidate/receipt.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+
+      - name: Record GitHub artifact wrapper
+        env:
+          ARTIFACT_ID: ${{ steps.candidate.outputs.artifact-id }}
+          ARTIFACT_URL: ${{ steps.candidate.outputs.artifact-url }}
+          ARTIFACT_DIGEST: ${{ steps.candidate.outputs.artifact-digest }}
+        run: |
+          printf '\n### GitHub artifact wrapper\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- Artifact ID: %s\n- Artifact URL: %s\n- Wrapper SHA-256: `%s`\n' \
+            "$ARTIFACT_ID" "$ARTIFACT_URL" "$ARTIFACT_DIGEST" >> "$GITHUB_STEP_SUMMARY"

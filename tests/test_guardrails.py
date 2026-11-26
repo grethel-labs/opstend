@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import runpy
 import shlex
 from importlib.util import resolve_name
@@ -10,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from run_guardrails import collect_checks
 from steward.executor.host import CMD_TIMEOUT_S, SAFE_ENV, Host
@@ -131,6 +133,35 @@ def test_ssh_transport_rejects_invalid_identity_before_delegating(monkeypatch):
             "true",
         ]
     ]
+
+
+def test_ci_preserves_unprivileged_guardrail_step():
+    source = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    workflow = yaml.safe_load(source)
+    # PyYAML's YAML 1.1 reader represents GitHub's unquoted "on" as True.
+    events = workflow.get("on", workflow.get(True, {}))
+    assert "pull_request" in events and "pull_request_target" not in events
+    assert workflow["permissions"] == {"contents": "read"}
+    assert not re.search(r"\$\{\{[^}]*\bsecrets\b", source)
+    for job in workflow["jobs"].values():
+        assert job.get("permissions", workflow["permissions"]) == {"contents": "read"}
+        for step in job["steps"]:
+            if action := step.get("uses"):
+                assert re.fullmatch(r"[^@]+@[a-f0-9]{40}", action), action
+                if action.startswith("actions/checkout@"):
+                    assert step["with"]["persist-credentials"] is False
+    python_job = workflow["jobs"]["python"]
+    assert "if" not in python_job and not python_job.get("continue-on-error")
+    steps = [step for step in python_job["steps"] if "run" in step]
+    commands = [step["run"] for step in steps]
+    guardrails = commands.index("uv run --no-sync python tests/run_guardrails.py -n auto")
+    assert "if" not in steps[guardrails] and not steps[guardrails].get("continue-on-error")
+    remaining = commands.index(
+        "uv run --no-sync pytest -n auto --exclude-guardrails --durations=10"
+    )
+    assert guardrails < remaining
+    assert "if" not in steps[remaining] and not steps[remaining].get("continue-on-error")
+    assert guardrails < next(i for i, command in enumerate(commands) if "apt-get" in command)
 
 
 @pytest.mark.parametrize(

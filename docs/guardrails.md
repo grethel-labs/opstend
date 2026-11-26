@@ -218,8 +218,11 @@ the production UI and API together in Chromium.
 - `tests/test_api.py::test_unsafe_requests_need_origin_and_csrf_token`
 - `tests/test_api.py::test_login_sets_hardened_cookie_and_never_echoes_the_token`
 
-### G18 Guardrail manifest completeness
+### G18 CI trust
 
-Every guardrail declares executable checks.
+Pull requests use read-only CI with pinned actions, no checked-out credentials
+and no secrets. The Python job runs the guardrail lane before tests that need
+host tooling.
 
+- `tests/test_guardrails.py::test_ci_preserves_unprivileged_guardrail_step`
 - `tests/test_guardrails.py::test_guardrail_manifest_rejects_rules_without_checks`
