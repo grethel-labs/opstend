@@ -2,7 +2,7 @@
 title Konfigurationsrevisionen – geprüfter Apply oder Deployment
 skinparam shadowing false
 actor "Betreiber" as op
-participant "Steward CLI" as cli
+participant "OpsTend CLI" as cli
 participant "Admin-API" as api
 participant "Executor" as exe
 participant "Ansible /\nGuarded Deploy" as deploy

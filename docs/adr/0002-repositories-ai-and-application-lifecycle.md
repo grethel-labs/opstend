@@ -43,8 +43,8 @@ document. No unofficial OAuth-to-API proxy or session token forwarding.
 One program, two entry points:
 
 ```bash
-./steward ai login --config config/server.yml --limit my-server   # from controller machine
-sudo steward-host ai login                                     # directly on server
+./opstend ai login --config config/server.yml --limit my-server   # from controller machine
+sudo opstend-host ai login                                     # directly on server
 ```
 
 The controller command opens an SSH terminal session and starts the same
@@ -257,7 +257,7 @@ This replaces version 0.1's rule of leaving removed projects running.
 
 Applied configuration is already root-owned on the server
 (`/etc/steward/config/desired.json`), with revision history in the admin API;
-`./steward config pull` retrieves it. Still needed: `config pull` without an
+`./opstend config pull` retrieves it. Still needed: `config pull` without an
 existing local file (only host, user, and server name as parameters), allowing a
 fresh checkout to restore full configuration. Secret values remain excluded;
 only references are returned.

@@ -1,4 +1,4 @@
-# Working in Steward
+# Working in OpsTend
 
 Use [the working guide](docs/working-guide.md) to locate the system and its
 entry points. Load the relevant repo skill from `.agents/skills/` when the

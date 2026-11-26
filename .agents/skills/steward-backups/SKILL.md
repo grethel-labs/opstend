@@ -1,6 +1,6 @@
 ---
 name: steward-backups
-description: Change Steward local captures, backup scheduling, immutable export, Restic uploads and receipts, restore drills, backup credentials, retention or import cleanup.
+description: Change OpsTend local captures, backup scheduling, immutable export, Restic uploads and receipts, restore drills, backup credentials, retention or import cleanup.
 ---
 
 # Backups and recovery

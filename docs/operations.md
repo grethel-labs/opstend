@@ -20,12 +20,12 @@ signed archive and independently obtained public key on the controller. Pass
 both to [`deploy`](release.md#deploy-a-signed-archive).
 
 ```bash
-./steward deploy --config config/server.yml --limit my-server \
-  --release-archive /path/to/steward-release.tar.gz \
+./opstend deploy --config config/server.yml --limit my-server \
+  --release-archive /path/to/opstend-release.tar.gz \
   --release-public-key /path/to/trusted-release-key.pub
 ```
 
-`deploy` shows the configuration diff before confirmation. `./steward plan C`
+`deploy` shows the configuration diff before confirmation. `./opstend plan C`
 uses a local `dist/release` build for its separate file preview.
 
 The new release is installed into `/opt/steward/releases/<version>/` before
@@ -87,10 +87,10 @@ an explicitly reviewed schema-default addition), bind recovery to its complete
 root desired hash:
 
 ```bash
-./steward plan --config config/server.yml --limit my-server \
+./opstend plan --config config/server.yml --limit my-server \
   --resume-from EXACT_REVIEWED_ROOT_DESIRED_SHA256
-./steward deploy --config config/server.yml --limit my-server \
-  --release-archive /path/to/steward-release.tar.gz \
+./opstend deploy --config config/server.yml --limit my-server \
+  --release-archive /path/to/opstend-release.tar.gz \
   --release-public-key /path/to/trusted-release-key.pub \
   --resume-from EXACT_REVIEWED_ROOT_DESIRED_SHA256
 ```
@@ -145,8 +145,8 @@ recovery. For an interrupted private application removal, use the
 [protected site runner](#resuming-a-private-application-removal).
 
 ```bash
-./steward deploy --config config/server.yml --limit my-server \
-  --release-archive /path/to/steward-release.tar.gz \
+./opstend deploy --config config/server.yml --limit my-server \
+  --release-archive /path/to/opstend-release.tar.gz \
   --release-public-key /path/to/trusted-release-key.pub \
   --resume-deployment OPERATION_ID
 ```
@@ -236,7 +236,7 @@ of the implemented code follows the L06 criteria in the [work queue](implementat
 - A failed start, health/isolation check or install triggers recovery.
   An interrupted migration update reverts to the previous image using the
   signed migration contract.
-- `steward rollback --project P --approval-id A --digest sha256:... [--acknowledge-data-restore]`
+- `opstend rollback --project P --approval-id A --digest sha256:... [--acknowledge-data-restore]`
   returns an applied update. It refuses when a later configuration change superseded it.
   A data restore moves the live tree to `data.preserved-<token>` next to `data/`;
   nothing is deleted, at most 8 such trees are kept (remove old ones yourself) and the
@@ -251,7 +251,7 @@ of the implemented code follows the L06 criteria in the [work queue](implementat
 ### Emergency update outside the maintenance window
 
 An operator (role `operator` only, never the controller or the API) may apply a validated
-update outside the window: `steward-host update-apply PROJECT --approval-id A --digest
+update outside the window: `opstend-host update-apply PROJECT --approval-id A --digest
 sha256:... --emergency-confirm --reason "why this cannot wait"` (reason 10-200 printable
 characters). Only the window check is waived: evidence, approval, fresh backup, recovery
 admission, target locks and the journal are the normal path, and a project without any
@@ -297,10 +297,10 @@ automatically. After 30 days they are reported as cleanup candidates, and a hint
 when at most two slots remain of the 8-tree and 10-capture limits: the controller exports
 the findings `update_retention:<project>:candidates` and
 `update_retention:<project>:preserved_trees` / `:spool_captures`. List them read-only with
-`steward-host update-retention [--project P]` (action `update_retention_status`; names,
+`opstend-host update-retention [--project P]` (action `update_retention_status`; names,
 approval ids, ages; no paths). Every spool artifact is listed and aged, plain
 `backup-capture` ones included (`bound_to_update: false`), and all of them count toward the
-10-artifact limit hint and the `spool_captures` finding. Export what you want to keep (`steward-host backup-export`),
+10-artifact limit hint and the `spool_captures` finding. Export what you want to keep (`opstend-host backup-export`),
 then remove old captures with `backup-retention-purge` and old preserved trees by hand.
 
 ### Capture spool limit
@@ -308,17 +308,17 @@ then remove old captures with `backup-retention-purge` and old preserved trees b
 Each project's executor capture spool holds at most 10 artifacts (`captures/<project>`).
 At the limit `backup-capture` and a `restore_required` update refuse with `unavailable`
 ("holds 10 artifacts"). Nothing is deleted automatically: export the captures you want to
-keep (`steward-host backup-export`), then retire the ones no longer needed
-(`steward-host backup-retention-purge`, which refuses protected or still needed captures),
+keep (`opstend-host backup-export`), then retire the ones no longer needed
+(`opstend-host backup-retention-purge`, which refuses protected or still needed captures),
 and retry. Do not retire the capture named in the journal of an applied
 `restore_required` update (`update_status` shows its `capture_id`) while you may still
 need `rollback`.
 
 ### Plan and deploy after an executor-applied update
 
-An applied update changes the server's configuration revision. `./steward plan` and
+An applied update changes the server's configuration revision. `./opstend plan` and
 `deploy` then refuse with exit 4 until the local file contains it: run
-`./steward config pull` (restart `steward-api` first if the pull still returns the old
+`./opstend config pull` (restart `steward-api` first if the pull still returns the old
 revision), review, and plan again. This also protects a rolled-back update from being
 re-applied by a stale file. Pending web UI revisions are unaffected.
 
@@ -336,14 +336,14 @@ recovered, so check `update_status` before retrying.
 *Quelle: [`03-deploy-und-revisionen.puml`](diagrams/src/03-deploy-und-revisionen.puml), erzeugt mit `docs/diagrams/render.sh`.*
 
 For a local file edit, run `plan` and then `deploy`. When the web UI has a
-different pending head, `deploy` returns exit 4. Use `./steward config pull C`
+different pending head, `deploy` returns exit 4. Use `./opstend config pull C`
 to copy the pending head into your file and review it before deploying.
 Use `--discard-pending` to explicitly discard the pending UI edit.
 
 To restore configuration from a fresh checkout without a local file:
 
 ```bash
-./steward config pull --host server.example.org --user deploy --port 22 \
+./opstend config pull --host server.example.org --user deploy --port 22 \
   --limit my-server --out config/server.yml
 ```
 
@@ -359,28 +359,28 @@ Existing `--config` pulls retain the local connection and admin token reference.
 ### Applying a pending web UI revision on the server
 
 The UI offers **Apply on server** for an eligible pending head. The CLI
-equivalent is `./steward config apply C --head FULL_REVISION`. The plan allows
+equivalent is `./opstend config apply C --head FULL_REVISION`. The plan allows
 only maintenance/project changes that leave all other generated Ansible inputs
 identical. Enabled backups and application stacks require a site deployment.
 The server binds the reviewed head, applied revision and installed release,
 then reads back its files before the job reports success. Run
-`./steward config pull C` to adopt the applied revision locally before planning
+`./opstend config pull C` to adopt the applied revision locally before planning
 or deploying again. Approvals bound to the previous revision become invalid.
 
-While `./steward deploy` runs, a server-side apply is refused with `target_busy`. A
+While `./opstend deploy` runs, a server-side apply is refused with `target_busy`. A
 guarded deployment holds the deployment fence and lock for its whole run; an unguarded one
 (install marker schema 1) leaves `/etc/steward/config/deploy-run.json` from its first
 play until its last task. An interrupted unguarded run keeps that marker, so applies stay
-refused until `./steward deploy` is repeated and finishes. The deployment writes
+refused until `./opstend deploy` is repeated and finishes. The deployment writes
 `desired.json` and the executor registry only if both still carry the revision it started
-from; otherwise it stops before writing (exit 4, "run `./steward config pull`"), so a
+from; otherwise it stops before writing (exit 4, "run `./opstend config pull`"), so a
 revision applied meanwhile is never lost.
 
 ## Token rotation
 
 ```bash
-./steward secrets init-admin-token --config config/server.yml --force
-./steward deploy C --release-archive /path/to/steward-release.tar.gz \
+./opstend secrets init-admin-token --config config/server.yml --force
+./opstend deploy C --release-archive /path/to/opstend-release.tar.gz \
   --release-public-key /path/to/trusted-release-key.pub
 ```
 
@@ -393,8 +393,8 @@ The old token no longer works.
 On the server:
 
 ```bash
-sudo /opt/steward/current/venv/bin/steward-host inventory
-sudo /opt/steward/current/venv/bin/steward-host inventory --project notes
+sudo /opt/steward/current/venv/bin/opstend-host inventory
+sudo /opt/steward/current/venv/bin/opstend-host inventory --project notes
 ```
 
 Package inventory retains binary/source names, exact distribution versions,
@@ -419,7 +419,7 @@ Export inventory as root and scan as an unprivileged operator:
 
 ```bash
 umask 077
-sudo /opt/steward/current/venv/bin/steward-host inventory > inventory.json
+sudo /opt/steward/current/venv/bin/opstend-host inventory > inventory.json
 /opt/steward/current/venv/bin/steward-scan --inventory inventory.json \
   --provider osv --provider trivy --out scan-report.json
 ```
@@ -709,9 +709,9 @@ read-only queries and help. See [the A04–A06 gates](STATUS.md#card-state).
 ## Kill switch
 
 ```bash
-./steward killswitch on C        # or: sudo /opt/steward/current/venv/bin/steward-host killswitch on
-./steward killswitch status C
-./steward killswitch off C
+./opstend killswitch on C        # or: sudo /opt/steward/current/venv/bin/opstend-host killswitch on
+./opstend killswitch status C
+./opstend killswitch off C
 ```
 
 The common executor guard blocks mutations by non-operator roles. Status,
@@ -723,12 +723,12 @@ firewall rules, limits and running services stay active.
 
 | Situation | Procedure |
 |---|---|
-| Service will not start | `./steward status C`; on the server: `sudo -u stw-<id> XDG_RUNTIME_DIR=/run/user/$(id -u stw-<id>) journalctl --user -u <id>.service` |
-| Web UI unreachable | `./steward status C` shows `steward-api` and proxy; `sudo journalctl -u steward-api` (intentionally refuses to start without a valid token) |
+| Service will not start | `./opstend status C`; on the server: `sudo -u stw-<id> XDG_RUNTIME_DIR=/run/user/$(id -u stw-<id>) journalctl --user -u <id>.service` |
+| Web UI unreachable | `./opstend status C` shows `steward-api` and proxy; `sudo journalctl -u steward-api` (intentionally refuses to start without a valid token) |
 | Firewall ruleset missing | Controller reloads it automatically; manually: `sudo systemctl restart steward-firewall` |
 | SSH/firewall change failed | Rollback timer restores previous state after 180 s. Check with `systemctl list-timers 'steward-*'` |
 | Locked out despite timer | Provider console: `rm /etc/ssh/sshd_config.d/50-steward.conf && systemctl reload ssh`, `nft delete table inet steward` |
-| Verify audit chain | `sudo /opt/steward/current/venv/bin/steward-host audit-verify` |
+| Verify audit chain | `sudo /opt/steward/current/venv/bin/opstend-host audit-verify` |
 | Rebuild server | Prepare fresh Ubuntu 26.04, verify and trust its host key, then deploy. Restore persistent data separately from a verified backup. See [backup and restore evidence](backup-foundation.md). |
 
 ## Uninstalling while preserving data
@@ -736,14 +736,14 @@ firewall rules, limits and running services stay active.
 Record the deployed services, their user UIDs and the data you intend to
 preserve before removing the installation.
 
-1. Turn on the [kill switch](#kill-switch). List installed Steward system units
+1. Turn on the [kill switch](#kill-switch). List installed OpsTend system units
    with `systemctl list-unit-files 'steward-*'`. Stop and disable the units and
    any timers or sockets installed by the release. Stop the corresponding
    rootless workloads and proxy. Review each user's units before disabling
    lingering.
 2. Review the host's firewall and SSH settings from console access. Use the
    installation's pre-Steward settings to restore host access before removing
-   Steward's firewall or SSH configuration.
+   OpsTend's firewall or SSH configuration.
 3. Remove the confirmed Steward-owned files and unit definitions, including
    each managed workload's generated Quadlet files by UID and workload name.
    The parent `/etc/containers/systemd/users/` can contain Quadlets belonging to
@@ -762,7 +762,7 @@ Two different rules apply, depending on where the workload is declared.
 - `deploy: false` → service stops, does not start after reboot, data remains.
 - `manage: false` → toolkit stops managing the project (continues running as is).
 - Delete entry → same as `manage: false`. Nothing is deleted; cleanup is manual.
-  `steward plan` lists such a project as "stays running, unmanaged"; it is never
+  `opstend plan` lists such a project as "stays running, unmanaged"; it is never
   retired or archived, and no change of this rule is planned for `projects`.
 
 **`applications` with `isolation: separate` (ADR 0002 section 6).** Removing a
@@ -773,7 +773,7 @@ for private guarded deployment and an installed release that supports guarded
 removal. Each service with registered data needs `allow_backup_pause: true`
 to authorize archiving.
 
-`steward plan` reports candidates by comparing the applied configuration
+`opstend plan` reports candidates by comparing the applied configuration
 with the complete desired file. The host checks the removal against its
 root-owned applied registry and the exact guarded deployment. A pending UI
 revision, an unreadable or incomplete registry, or a change to `manage: false`
@@ -810,14 +810,14 @@ application or an absent application with any unmanaged service.
 **Manual fallback.** With the application still declared, set `deploy: false`
 on every service and deploy to stop it and disable autostart. Prepare the
 desired file with the application absent. On the server, as root, run
-`steward-host application-retire <id> --desired-config <file-you-will-deploy>`.
+`opstend-host application-retire <id> --desired-config <file-you-will-deploy>`.
 The executor checks its own registry and requires the services to be stopped.
 It archives each data tree and image under
 `/srv/steward/archive/<id>/<operation>/`, rereads the archive, checks for changes
 in the working data, then releases the working area and stops the dedicated
 user managers. Repeat the same command after an interruption. The journal
 resumes a verified or releasing operation and rebuilds an unverified archive.
-Use `steward-host application-retirement-status <id>` to see the journal, then
+Use `opstend-host application-retirement-status <id>` to see the journal, then
 deploy the removal file after the operation reaches `released`.
 
 Data larger than `backup.max_mib` (default 256 MiB, maximum 1 GiB) is refused.

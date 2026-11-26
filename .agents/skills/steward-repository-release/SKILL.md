@@ -1,6 +1,6 @@
 ---
 name: steward-repository-release
-description: Change Steward Git fetching, workload contract proposals, isolated builds, validator and deployment handoff, repair diffs or toolkit release packaging and verification.
+description: Change OpsTend Git fetching, workload contract proposals, isolated builds, validator and deployment handoff, repair diffs or toolkit release packaging and verification.
 ---
 
 # Repositories and toolkit release

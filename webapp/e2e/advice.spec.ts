@@ -89,10 +89,11 @@ test("admin advice is read-only through the real API, UI and inference listener"
     usage: { tokens: 0, running: 0 },
   });
 
-  const advice = page.getByRole("region", { name: "Advice", exact: true });
+  const advice = page.getByRole("region", { name: "Ask Zorec", exact: true });
   const input = advice.getByRole("textbox", { name: "Advice question", exact: true });
-  const submit = advice.getByRole("button", { name: "Ask for advice", exact: true });
+  const submit = advice.getByRole("button", { name: "Ask Zorec", exact: true });
   const result = advice.getByRole("status");
+  const avatar = advice.locator(".zorec-mark");
   const ask = async () => {
     await input.fill(question.question);
     const pending = page.waitForResponse(response =>
@@ -111,7 +112,12 @@ test("admin advice is read-only through the real API, UI and inference listener"
   };
 
   await expect(submit).toBeDisabled();
+  await expect(avatar).toHaveAttribute("data-gesture", "neutral");
+  await input.fill(question.question);
+  await expect(avatar).toHaveAttribute("data-gesture", "listening");
   const answer = await ask();
+  await expect(avatar).toHaveAttribute("data-gesture", "answered");
+  await expect(avatar.locator("img")).toHaveJSProperty("currentSrc", ORIGIN + "/brand/zorec.svg?view=light-answered#light-answered");
   expect(answer).toContain('img src=x onerror="window.adviceXss=1" click((link removed) everyone');
   expect(answer).toContain("&lt;img src=x&gt; &amp; **literal markdown**");
   expect(answer).not.toMatch(/http:\/\/x|@everyone|<img/);
@@ -119,7 +125,7 @@ test("admin advice is read-only through the real API, UI and inference listener"
   expect(answer).toContain("Missing data: no data from controller.");
   expect(answer).toContain("Proposal (not executed; needs the registered approval path): check_backup for host: Review backup evidence.");
   await expect(result.locator("*")).toHaveCount(0);
-  await expect(advice.locator("a, img, button:not([type=submit]), [role=button], strong")).toHaveCount(0);
+  await expect(result.locator("a, img, button, [role=button], strong")).toHaveCount(0);
   await expect(advice.locator("form")).toHaveCount(1);
   await expect(advice.getByRole("button")).toHaveCount(1);
   expect(await page.evaluate(() => "adviceXss" in window)).toBe(false);
@@ -164,6 +170,7 @@ test("admin advice is read-only through the real API, UI and inference listener"
 
   await control("exhaust");
   expect(await ask()).toMatch(/^Advice gap: the AI budget is exhausted\./);
+  await expect(avatar).toHaveAttribute("data-gesture", "limit");
   await checkDeterministicViews();
   const exhausted = await readFixture();
   expect(exhausted).toMatchObject({
@@ -178,6 +185,7 @@ test("admin advice is read-only through the real API, UI and inference listener"
 
   await control("close");
   expect(await ask()).toMatch(/^Advice gap: the provider is unavailable\./);
+  await expect(avatar).toHaveAttribute("data-gesture", "offline");
   await checkDeterministicViews();
   const unavailable = await readFixture();
   expect(unavailable).toMatchObject({

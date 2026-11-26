@@ -42,14 +42,14 @@ Sicht-/Bedienungslücke der heterogenen Flotte.
 | Pi agentenlos weiterführen oder nativen Arm64-Agenten betreiben | Agentenlos verursacht weniger Betrieb und eignet sich für Status und Kapazität. Ein nativer Agent lohnt bei konkretem Bedarf an sicherer lokaler Aktion und eigener Host-Evidenz. |
 | Eingebautes Dashboard oder vorhandene Observability-Sammlung | Integrierte Projektion bleibt Bedienpfad. Prometheus-/OTel-Anbindung für längere Zeitachsen oder mehr Quellen nach realer Last. [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/) |
 | Topologie über Konfiguration, L2-Nachbarn oder echte Flows | Bestehende Provenienz erhalten. Ein L2- oder Flow-Adapter bleibt lesend, gekennzeichnet und auf einen registrierten Beobachtungsbereich begrenzt. Hubble ist ein Beispiel für eine plattformspezifische Kubernetes-Flow-Quelle. [Hubble Dokumentation](https://docs.cilium.io/en/stable/observability/hubble/) |
-| Nativ mehr Plattformprofile gleichzeitig oder nacheinander | Je Betriebssystem/Architektur eine testbare Kombination. PVE Arm64, Steward Linux Arm64 und ein NAS-Adapter erhalten getrennte Supportzeilen. [PVE Arm64 Plattformhinweise](https://forum.proxmox.com/threads/proxmox-virtual-environment-now-available-for-64-bit-arm-arm64.185526/) |
+| Nativ mehr Plattformprofile gleichzeitig oder nacheinander | Je Betriebssystem/Architektur eine testbare Kombination. PVE Arm64, OpsTend Linux Arm64 und ein NAS-Adapter erhalten getrennte Supportzeilen. [PVE Arm64 Plattformhinweise](https://forum.proxmox.com/threads/proxmox-virtual-environment-now-available-for-64-bit-arm-arm64.185526/) |
 
 **Umfang:** Eine zusätzliche reale OS-/Architektur-Kombination nach
 S02-Verfahren oder ein primär benötigter Geräteadapter, plus der
 kleinste benötigte Datenausgang. Geräte- oder Appliance-Schreiben
 setzt eine eigene registrierte Aktion, minimale Rolle, native Quittung
 und Rückweg voraus. Eine verlässlich registrierte Außenschnittstelle
-kann ihr Schema über OpenAPI dokumentieren. [Steward OS-Profile](../repositories-release.md#s02--add-one-osarchitecture-profile-at-a-time) ·
+kann ihr Schema über OpenAPI dokumentieren. [OpsTend OS-Profile](../repositories-release.md#s02--add-one-osarchitecture-profile-at-a-time) ·
 [OpenAPI Initiative](https://openapis.org/what-is-openapi/)
 
 **Abnahme:** Signierter Installationspfad auf der konkret unterstützten
@@ -133,7 +133,7 @@ Ersatzprofil möglich. Reproduzierbare Modellreferenzen und ein
 belegter Cache erleichtern Übernahme. KI bleibt optional;
 Berechtigung, Gast-HA, Wiederherstellung und Deterministik nutzen
 weiter die regulären Verträge.
-[Linux-/KI-Profil](05-linux-devices-and-ai.md) · [Steward HA](07-steward-ha.md) ·
+[Linux-/KI-Profil](05-linux-devices-and-ai.md) · [OpsTend HA](07-steward-ha.md) ·
 [KI-Arbeitspakete](../ai.md)
 
 **Abnahme:** Ein konkreter Workload, reale Ressourcen-/Isolationsprobe,

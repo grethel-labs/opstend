@@ -28,7 +28,7 @@ BACKUP_SOCKET = "/run/steward-backup/query.sock"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="steward-host")
+    parser = argparse.ArgumentParser(prog="opstend-host")
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status", help="verified platform status as JSON")

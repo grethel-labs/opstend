@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" overflow="hidden" role="img" aria-labelledby="title">
+  <title id="title">Zorec</title>
+  <defs>
+    <path id="shell" d="M15 12h34a9 9 0 0 1 9 9v22l-8 8H14l-8-8V21a9 9 0 0 1 9-9Z" stroke-width="2.5" stroke-linejoin="round" />
+    <rect id="screen" x="10" y="16" width="44" height="25" rx="5" />
+    <rect id="port" x="42" y="44" width="8" height="4" rx="2" />
+    <pattern id="light-housing" width="64" height="64" patternUnits="userSpaceOnUse">
+      <rect x="1" y="1" width="62" height="62" rx="13" fill="#E8F5F1" stroke="#A8CBC4" />
+      <use href="#shell" fill="#0B7168" stroke="#111827" />
+      <use href="#screen" fill="#0B232A" />
+      <use href="#port" fill="#B8E6FB" />
+    </pattern>
+    <pattern id="dark-housing" width="64" height="64" patternUnits="userSpaceOnUse">
+      <rect x="1" y="1" width="62" height="62" rx="13" fill="#172B34" stroke="#416268" />
+      <use href="#shell" fill="#11645F" stroke="#69CFBF" />
+      <use href="#screen" fill="#101C2C" />
+      <use href="#port" fill="#8CBCD3" />
+    </pattern>
+    <path id="open" d="M24 25v6m16-6v6" />
+    <path id="upturned" d="m20 30 4-5 4 5m8 0 4-5 4 5" />
+    <g id="expressions" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Column order matches the light and dark views below. -->
+      <use href="#open" />
+      <g transform="translate(64)">
+        <path d="M26 24v8m16-8v8" />
+      </g>
+      <g transform="translate(128)">
+        <path d="M25 28h5m10 0h5" />
+        <path d="M21 34h1m26 0h1" stroke-width="2" opacity=".6" />
+      </g>
+      <g transform="translate(192)">
+        <use href="#upturned" />
+        <use href="#port" fill="currentColor" stroke="none" />
+      </g>
+      <g transform="translate(256)">
+        <path d="M20 28h7m13 0h0" />
+        <use href="#port" fill="#FFDA91" stroke="none" />
+      </g>
+      <g transform="translate(320)">
+        <path d="M23 28h3m5 0h2m5 0h3" />
+        <use href="#port" fill="#FFDA91" stroke="none" />
+      </g>
+      <g transform="translate(384)">
+        <path d="M21 30h6m10 0h6" opacity=".5" />
+        <use href="#port" fill="#798A9C" stroke="none" />
+      </g>
+      <g transform="translate(448)">
+        <path d="M21 26v6m16-7v7" />
+        <path d="M43 20v6m-3-3h6" stroke-width="1.5" />
+      </g>
+      <g transform="translate(512)">
+        <path d="M24 25v6m13-3h6" />
+        <path d="M19 21h-4v4m30 10h4v-4" stroke-width="1.5" />
+      </g>
+      <g transform="translate(576)">
+        <path d="M23 26v4m16-4v4" />
+        <path d="M15 34h34" stroke-width="2" opacity=".6" />
+      </g>
+      <g transform="translate(640)">
+        <path d="M20 25v6m20-6v6" />
+        <path d="m31 32 2 2 3-3" stroke-width="1.5" />
+      </g>
+      <g transform="translate(704)">
+        <path d="M23 23v5m18-5v5" />
+        <path d="M32 28v7m-3-3 3 3 3-3" stroke-width="1.8" />
+      </g>
+      <g transform="translate(768)">
+        <path d="m20 25 7 4m17-4-7 4" />
+        <use href="#port" fill="#FFADBA" stroke="none" />
+      </g>
+      <g transform="translate(832)">
+        <use href="#open" />
+        <use href="#port" fill="currentColor" stroke="none" />
+      </g>
+    </g>
+  </defs>
+  <view id="light-neutral" viewBox="0 0 64 64" />
+  <view id="light-listening" viewBox="64 0 64 64" />
+  <view id="light-thinking" viewBox="128 0 64 64" />
+  <view id="light-answered" viewBox="192 0 64 64" />
+  <view id="light-missing-data" viewBox="256 0 64 64" />
+  <view id="light-limit" viewBox="320 0 64 64" />
+  <view id="light-offline" viewBox="384 0 64 64" />
+  <view id="light-setup" viewBox="448 0 64 64" />
+  <view id="light-verifying" viewBox="512 0 64 64" />
+  <view id="light-scanning" viewBox="576 0 64 64" />
+  <view id="light-selection" viewBox="640 0 64 64" />
+  <view id="light-awaiting-download" viewBox="704 0 64 64" />
+  <view id="light-failed" viewBox="768 0 64 64" />
+  <view id="light-ready" viewBox="832 0 64 64" />
+  <view id="dark-neutral" viewBox="0 64 64 64" />
+  <view id="dark-listening" viewBox="64 64 64 64" />
+  <view id="dark-thinking" viewBox="128 64 64 64" />
+  <view id="dark-answered" viewBox="192 64 64 64" />
+  <view id="dark-missing-data" viewBox="256 64 64 64" />
+  <view id="dark-limit" viewBox="320 64 64 64" />
+  <view id="dark-offline" viewBox="384 64 64 64" />
+  <view id="dark-setup" viewBox="448 64 64 64" />
+  <view id="dark-verifying" viewBox="512 64 64 64" />
+  <view id="dark-scanning" viewBox="576 64 64 64" />
+  <view id="dark-selection" viewBox="640 64 64 64" />
+  <view id="dark-awaiting-download" viewBox="704 64 64 64" />
+  <view id="dark-failed" viewBox="768 64 64 64" />
+  <view id="dark-ready" viewBox="832 64 64 64" />
+  <rect width="896" height="64" fill="url(#light-housing)" />
+  <rect y="64" width="896" height="64" fill="url(#dark-housing)" />
+  <use href="#expressions" color="#A4F2E3" />
+  <use href="#expressions" y="64" color="#B4FFEC" />
+</svg>

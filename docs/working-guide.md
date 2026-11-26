@@ -1,6 +1,6 @@
-# Wie Steward und seine Entwicklungsregeln zusammenspielen
+# Wie OpsTend und seine Entwicklungsregeln zusammenspielen
 
-Steward übersetzt eine überprüfte Sollkonfiguration in einen isolierten
+OpsTend übersetzt eine überprüfte Sollkonfiguration in einen isolierten
 Linux-Betrieb. Beobachtungen liefern die Grundlage für Entscheidungen.
 Host-Aktionen laufen über registrierte Executor-Aktionen. CLI und Ansible
 installieren die geprüfte Konfiguration über den vorgesehenen Deploy-Pfad.

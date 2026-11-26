@@ -23,7 +23,7 @@ Rollenentscheidung, Transportvertrauen und Bindung an eine konkrete
 native Ressource werden separat geprüft. Externe Linux-Hosts
 bekommen dieselben fachlichen Rollen im Rahmen ihres Zielprofils.
 [NIST Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final) ·
-[Steward Executor-Erweiterung](../../extending.md)
+[OpsTend Executor-Erweiterung](../../extending.md)
 
 ## TLS- und Credential-Optionen
 
@@ -69,7 +69,7 @@ nicht freigegebene Serialnummern, private Netzwerk- oder
 Credential-Werte gehen nicht in Reports, Browserbundles,
 Backup-Metadaten oder Telemetrie. Aufbewahrung folgt dem
 Datentyp. Ein Audit-Export braucht gesonderte Scope- und
-Redaktionsregeln. [Steward Architektur](../../architecture.md)
+Redaktionsregeln. [OpsTend Architektur](../../architecture.md)
 
 ## Störfälle und kontrollierte Wiederaufnahme
 

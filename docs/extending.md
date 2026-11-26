@@ -127,8 +127,8 @@ probe adapters are not implemented yet. Tests: `tests/test_artifact_validation.p
 `core/ai_auth.py` holds the login state machine (`pending/active/expired/revoked`) and
 the closed `AUTH_METHODS` registry: a method is usable only when it carries dated
 official `Evidence`; all three subscription methods are unavailable and their program
-names are UNVERIFIED. The host entry is `steward-host ai ...` (`aihost.py`), the
-controller entry `steward ai ...` (fixed SSH argv, `cli/ai_login.py`). `core/model_selection.py`
+names are UNVERIFIED. The host entry is `opstend-host ai ...` (`aihost.py`), the
+controller entry `opstend ai ...` (fixed SSH argv, `cli/ai_login.py`). `core/model_selection.py`
 (rule, store, weekly run through `MaintenanceRuns`) and `core/model_suite.py` (versioned
 synthetic suite) choose models without any model involvement; `ai.model_policy` carries
 families, dated prices and the evaluation budget. `core/advice.py` answers `ask` from
@@ -167,7 +167,7 @@ in the released configuration. Tests:
 `core/config_apply.py` plans and `executor/config_apply.py` performs the registered
 action `config_apply`: it installs a pending UI revision locally only when every
 generated Ansible input is unchanged and only `maintenance`/`projects` differ (registry
-first, `desired.json` last as the commit point); anything else needs `./steward deploy`.
+first, `desired.json` last as the commit point); anything else needs `./opstend deploy`.
 `core/drills.py` (ledger) and `executor/drills.py` (`drill_announce`, `drill_run`,
 `drill_release`, `drill_status`) implement announced drills; `core/drill_cycle.py` is the
 controller driver. `maintenance.drills` stays an unavailable feature. Tests:

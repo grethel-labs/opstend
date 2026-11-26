@@ -1,7 +1,7 @@
 # 07 · Steward-Quorum, Dienstplatzierung und externe Schreibwirkungen
 
 Karten CP01–CP03 in [Infrastruktur](../infrastructure.md). Stand der
-Recherche 2026-11-24. Steward benötigt für zentrale Rollen einen
+Recherche 2026-11-24. OpsTend benötigt für zentrale Rollen einen
 automatischen, überprüfbaren Inhaberwechsel. PVE-Gast-HA, Backup-Replikation
 und die Bereitstellung eigener Steward-Dienste bleiben getrennte Abläufe.
 
@@ -79,7 +79,7 @@ Ausführungspfad weiter.
    möglichst getrennten Fehlerpfaden. Ein vorgewärmter Prozess
    ist erst bereit, wenn unterstützte Version, bestätigte Revision
    und Testzugang zum gesicherten Ausführungspfad passen.
-4. Fällt die Redundanz unter das Ziel, zeigt Steward Ursache und
+4. Fällt die Redundanz unter das Ziel, zeigt OpsTend Ursache und
    verbleibende Rollen. Ein zurückgekehrter Host beginnt als
    Kandidat. Repriorisierung und Rückwechsel geschehen bei
    geplanter Wartung oder bestätigtem Bedarf. Kurzzeitige
@@ -125,7 +125,7 @@ Empfängersemantik tatsächlich zur Verfügung steht.
 | `uncertain` | Antwort fehlt, Abschluss oder Folge des alten Schreibwegs unklar | Halt auf dem Wirkungsbereich. Alte Ausführung nachweislich beenden oder wirksam isolieren und native Tasks/Ziel lesen. Fehlende Belege lassen den Fall gesperrt. |
 | Terminal | Passende Evidenz für Abschluss, Ausführungsausschluss oder ausdrücklichen fachlichen Abgleich nach wirksamem Fencing | Sperre in derselben Transaktion lösen, die die terminale Quittung festhält. Ein neuer Auftrag braucht eigene Vorbedingungen. |
 
-**Geltungsbereich der Garantie.** Nach verlorenem Quorum kann Steward
+**Geltungsbereich der Garantie.** Nach verlorenem Quorum kann OpsTend
 keinen neuen Dispatch-Claim bestätigen. Bereits beanspruchte oder
 native angenommene Vorgänge können sich weiter auswirken. Ein
 fehlgeschlagener Claim führt zu einer Leseprüfung anhand der
@@ -141,7 +141,7 @@ Native Außenwirkung lässt sich im Unsicherheitsfall
 nicht durch Ablauf der Lease, Schlüsselrotation allein oder ein leeres
 Task-Listing ausschließen. Für Rotation und Sperrfreigabe müssen
 eventuell vor dem Widerruf angenommene native Tasks berücksichtigt
-werden. Dieser Einsatz von Fencing gilt für von Steward kontrollierte
+werden. Dieser Einsatz von Fencing gilt für von OpsTend kontrollierte
 Pfadidentitäten. Manuelle PVE-Aktionen werden als externe Änderungen
 beobachtet und führen gegebenenfalls zum Abgleich.
 
@@ -167,7 +167,7 @@ Der Wiederaufbau nach vollständigem Verlust beginnt außerhalb des
 alten Pfads. Restore-Artefakt, Hash, Version, Schlüssel und Anleitung
 existieren extern. Ein etcd-Restore bildet einen neuen Cluster aus
 dem Snapshot. CP01 prüft Revisionssprünge und erzwungene
-Neuinitialisierung von Watch-Lesern. Steward legt zusätzlich eine neue
+Neuinitialisierung von Watch-Lesern. OpsTend legt zusätzlich eine neue
 Steuerungs-Generation fest, damit ältere Autorisierungen keine
 Gültigkeit durch wiederverwendete Zähler erhalten. Vor der
 Schreibfreigabe müssen alte Write-Credentials und Pfade gesperrt und

@@ -9,6 +9,7 @@ import { AiPage } from "./pages/Ai";
 import { OverviewPage } from "./pages/Overview";
 import { ProjectsPage } from "./pages/Projects";
 import { ScansPage } from "./pages/Scans";
+import { Zorec } from "./Zorec";
 
 const PAGES = {
   overview: { title: "Overview", component: OverviewPage },
@@ -18,7 +19,7 @@ const PAGES = {
   events: { title: "Events", component: EventsPage },
   scans: { title: "Vulnerabilities", component: ScansPage },
   jobs: { title: "Jobs", component: JobsPage },
-  ai: { title: "AI", component: AiPage },
+  ai: { title: "Zorec", component: AiPage },
   audit: { title: "Audit", component: AuditPage },
 } as const;
 type PageId = keyof typeof PAGES;
@@ -30,6 +31,21 @@ export interface PageProps {
 function pageFromHash(): PageId {
   const id = window.location.hash.replace(/^#\/?/, "");
   return id in PAGES ? (id as PageId) : "overview";
+}
+
+function ProductMark() {
+  return (
+    <>
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcSet="/brand/opstend-dark.svg" />
+        <img className="product-mark" src="/brand/opstend.svg" alt="" width="40" height="40" />
+      </picture>
+      <span className="product-wordmark">
+        <span className="product-name">opstend</span>
+        <span className="product-byline">by Grethel Labs</span>
+      </span>
+    </>
+  );
 }
 
 function Login({ onDone }: { onDone: () => void }) {
@@ -55,9 +71,10 @@ function Login({ onDone }: { onDone: () => void }) {
 
   return (
     <main className="login">
-      <form onSubmit={submit} className="card">
-        <h1>steward</h1>
-        <p className="muted">Sign in with the admin token of this server.</p>
+      <form onSubmit={submit} className="card login-card">
+        <div className="product-brand"><ProductMark /></div>
+        <h1>Sign in</h1>
+        <p className="muted">Use the admin token for this server.</p>
         <label htmlFor="token">Admin token</label>
         <input
           id="token"
@@ -106,28 +123,35 @@ export function App() {
   const Page = PAGES[page].component;
   return (
     <div className="shell">
-      <header>
-        <strong>steward</strong>
-        <nav aria-label="Sections">
+      <header className="app-header">
+        <div className="app-bar shell-width">
+          <a href="#/overview" className="product-brand" aria-label="OpsTend home, by Grethel Labs">
+            <ProductMark />
+          </a>
+          <div className="app-actions">
+            <span className="version">v{version}</span>
+            <button
+              className="secondary"
+              onClick={async () => {
+                await api.logout().catch(() => undefined);
+                setCsrf("");
+                setAuth("no");
+              }}
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+        <nav className="section-nav shell-width" aria-label="Sections">
           {(Object.keys(PAGES) as PageId[]).map((id) => (
             <a key={id} href={`#/${id}`} aria-current={id === page ? "page" : undefined}>
+              {id === "ai" && <Zorec size={24} />}
               {PAGES[id].title}
             </a>
           ))}
         </nav>
-        <span className="muted">v{version}</span>
-        <button
-          className="secondary"
-          onClick={async () => {
-            await api.logout().catch(() => undefined);
-            setCsrf("");
-            setAuth("no");
-          }}
-        >
-          Sign out
-        </button>
       </header>
-      <main>
+      <main className="workspace shell-width">
         <h1>{PAGES[page].title}</h1>
         <Page onAuthLost={() => setAuth("no")} />
       </main>

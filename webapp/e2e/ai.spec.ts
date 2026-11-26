@@ -13,11 +13,19 @@ test("initial provider uses references, scoped scans and explicit model choice",
   await page.goto("/");
   await page.getByLabel("Admin token").fill(TOKEN);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("link", { name: "AI", exact: true }).click();
+  await page.getByRole("link", { name: "Zorec", exact: true }).click();
+
+  const features = page.getByRole("region", { name: "What Zorec adds" });
+  const avatar = features.locator(".zorec-mark");
+  await expect(features).toContainText("require an enabled AI runtime");
+  await expect(features.getByRole("listitem")).toContainText([
+    "Advice in Overview", "Bot advice", "Model evaluation and selection",
+  ]);
 
   const native = page.getByRole("radio", { name: "Ollama (cloud models)", exact: true });
   const cloud = page.getByRole("radio", { name: "Ollama Cloud (API key)", exact: true });
   await expect(native).toBeDisabled();
+  await expect(avatar).toHaveAttribute("data-gesture", "setup");
   await expect(native.locator("../..")).toContainText("unavailable (");
   await expect(page.getByRole("button", { name: "Queue model scan" })).toHaveCount(0);
   await expect(page.getByText('<img src=x onerror="window.aiSourceXss=1">', { exact: true })).toBeVisible();
@@ -65,8 +73,9 @@ test("initial provider uses references, scoped scans and explicit model choice",
   expect(scan.request().headers()["x-csrf-token"]).toBe(session.csrf);
   const queued = await scan.json();
   expect(queued).toMatchObject({ kind: "scan", state: "pending" });
-  const requests = page.getByRole("list", { name: "Recent AI requests" });
+  const requests = page.getByRole("list", { name: "Recent Zorec requests" });
   await expect(requests).toContainText("scan — queued (pending)");
+  await expect(avatar).toHaveAttribute("data-gesture", "scanning");
   await expect(page.getByRole("button", { name: /as initial model/ })).toHaveCount(0);
   const view = await (await page.request.get("/api/ai")).json();
   expect(view).toMatchObject({
@@ -82,6 +91,7 @@ test("initial provider uses references, scoped scans and explicit model choice",
   const suggested = page.getByRole("button", { name: "Choose deepseek-v4.1-flash as initial model" });
   const model = page.getByRole("button", { name: "Choose fixture-model:cloud as initial model" });
   await expect(suggested.locator("..")).toContainText("Suggested model", { timeout: 10000 });
+  await expect(avatar).toHaveAttribute("data-gesture", "selection");
   await expect(page.getByRole("button", { name: /as initial model/ })).toHaveCount(2);
   await expect(page.getByText("Selected model: –")).toBeVisible();
 
@@ -118,7 +128,7 @@ test("managed compatible provider verifies and binds rotation to the reviewed re
   await page.goto(origin);
   await page.getByLabel("Admin token").fill(TOKEN);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("link", { name: "AI", exact: true }).click();
+  await page.getByRole("link", { name: "Zorec", exact: true }).click();
 
   const change = page.getByRole("button", { name: "Change provider" });
   const compatible = page.getByRole("radio", { name: "OpenAI-compatible" });
@@ -128,6 +138,7 @@ test("managed compatible provider verifies and binds rotation to the reviewed re
   const key = page.getByLabel("API key", { exact: true });
   const newKey = page.getByLabel("New API key");
   const verifying = page.getByRole("status").filter({ hasText: "Verifying provider" });
+  const avatar = page.getByRole("region", { name: "What Zorec adds" }).locator(".zorec-mark");
   const choice = { option: "openai-compatible", base_url: baseUrl };
 
   async function view() {
@@ -158,6 +169,7 @@ test("managed compatible provider verifies and binds rotation to the reviewed re
   await key.fill(keys.failed);
   await submit({ ...choice, api_key: keys.failed });
   await expect(verifying).toBeVisible();
+  await expect(avatar).toHaveAttribute("data-gesture", "verifying");
   await expect(page.getByText("no provider chosen")).toBeVisible();
   await expect(key).toHaveCount(0);
   expect(await view()).toMatchObject({ provider: null, pending_provider: { status: "pending" } });
@@ -167,6 +179,7 @@ test("managed compatible provider verifies and binds rotation to the reviewed re
   await expect(page.getByRole("alert")).toContainText(
     "Provider verification failed (provider_validation_failed)", { timeout: 10000 },
   );
+  await expect(avatar).toHaveAttribute("data-gesture", "failed");
   await change.click();
   await compatible.check();
   await expect(key).toHaveValue("");

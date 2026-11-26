@@ -48,10 +48,24 @@ test("real login, protected session, navigation and logout under production CSP"
     }
   });
   await page.goto("/");
+  await expect(page).toHaveTitle("OpsTend Admin");
+  await expect(page.locator(".product-mark")).toHaveJSProperty("naturalWidth", 64);
+  await expect(page.getByText("by Grethel Labs", { exact: true })).toBeVisible();
+  await expect(page.locator('link[rel="icon"]:not([media])')).toHaveAttribute("href", "/brand/opstend.svg");
   await page.getByLabel("Admin token").fill("wrong-token");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("alert")).toBeVisible();
   await login(page);
+  const productHome = page.getByRole("link", { name: "OpsTend home, by Grethel Labs" });
+  await expect(productHome.getByText("by Grethel Labs", { exact: true })).toBeVisible();
+  await expect(productHome.locator("img")).toHaveJSProperty("naturalWidth", 64);
+  const zorec = page.getByRole("link", { name: "Zorec", exact: true });
+  await expect(zorec).toHaveAttribute("href", "#/ai");
+  await expect(zorec.locator("img")).toHaveJSProperty("naturalWidth", 64);
+  await expect(zorec.locator("img")).toHaveJSProperty("currentSrc", new URL("/brand/zorec.svg?view=light-neutral#light-neutral", page.url()).href);
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(productHome.locator("img")).toHaveJSProperty("currentSrc", new URL("/brand/opstend-dark.svg", page.url()).href);
+  await expect(zorec.locator("img")).toHaveJSProperty("currentSrc", new URL("/brand/zorec.svg?view=dark-neutral#dark-neutral", page.url()).href);
   await expect(page.getByRole("alert")).toContainText("Observation gap");
   const session = (await context.cookies()).find(cookie => cookie.name.startsWith("__Host-"));
   expect(session?.httpOnly).toBe(true);
@@ -199,7 +213,7 @@ test("apply is bound to saved revisions and shows the durable outcome across pol
   expect(original).toMatch(projectMemory);
   const unsupported = await saveRevision(page, original.replace(projectMemory, "    memory_mb: 384"));
   await expectRevisions(page, unsupported, applied);
-  await expect(plan).toContainText("./steward deploy");
+  await expect(plan).toContainText("./opstend deploy");
   await expect(apply).toHaveCount(0);
   const unsupportedResponse = await page.request.post(APPLY, {
     data: { head: unsupported, applied },

@@ -2,7 +2,7 @@
 
 Karten PH01–PH03 in [Proxmox](../proxmox.md). Stand der Recherche 2026-11-24.
 PVE führt die Platzierung und den Wiederanlauf der aufgenommenen Gäste
-durch. Steward vergleicht Eignung, beantragt konkrete native Aktionen und
+durch. OpsTend vergleicht Eignung, beantragt konkrete native Aktionen und
 führt ihre Belege zusammen. Der [Steward-Rollenwechsel](07-steward-ha.md)
 hat ein eigenes Quorum und einen eigenen Ausfallablauf.
 
@@ -32,7 +32,7 @@ bleiben dadurch gemeinsame Ausfalldomänen.
 | Hyperkonvergentes Ceph/RBD | Abhängig von Pool-/Quorum-Konfiguration, verbleibenden OSDs und Betrieb während Rebalance. | Platzbedarf für Replikate, Netzwerk unter Recovery-Last, zusätzliche Daemons, gemeinsame Boot-/Datenplatten und Strom. | Spätere Supportvariante, wenn Benchmark und Fehlertest bei Last passen. Drei NUCs allein belegen keine Eignung. [Proxmox Ceph](https://github.com/proxmox/pve-docs/blob/master/pveceph.adoc) · [Ceph Hardware](https://docs.ceph.com/en/latest/start/hardware-recommendations/) |
 | Lokaler Gast-Storage ohne erreichbares Replikat | Wiederherstellung vom letzten qualifizierten Backup nach Freigabe. | Dauer bis zur Bereitstellung eines Zielknotens und Nutzdatenprüfung. | Normal für eigenständige Rechner und lokale Gerätebindung. Keine PH03-Freigabe für diesen Gast. |
 
-Steward speichert pro Gast einen zeitlich gebundenen
+OpsTend speichert pro Gast einen zeitlich gebundenen
 **Eignungsbefund**. Kriterien sind erlaubte Knoten, native HA-Regel,
 Node-/PVE-Version, Ressourcenkapazität nach Reserven, Netz/Bridge/VLAN,
 verfügbare Gast-Volumes und deren Replikationszeit oder die
@@ -67,7 +67,7 @@ Lastverteilung bleiben Autorität für PVE-HA-Gäste. Die
 Steward-Dienstplatzierung behandelt ausschließlich Steward-Rollen.
 Wartungsplanung für einen Knoten ist ein eigener, bestätigter Vorgang
 mit heute beobachtetem Zustand. Clusterweites Disarm setzt PVE-HA-
-Schutzmechanismen zeitweise außer Kraft. Steward zeigt diesen Status als
+Schutzmechanismen zeitweise außer Kraft. OpsTend zeigt diesen Status als
 degradiert und nutzt ihn nicht als PH02-Wartungsaktion.
 [PVE HA Manager und Cluster Resource Scheduler](https://github.com/proxmox/pve-docs/blob/master/ha-manager.adoc) ·
 [PVE 9.2 Veröffentlichung](https://www.proxmox.com/en/about/company-details/press-releases/proxmox-virtual-environment-9-2)
@@ -85,13 +85,13 @@ degradiert und nutzt ihn nicht als PH02-Wartungsaktion.
    werden Mitgliedschaft, laufende PVE-Aufträge und Kapazität
    erneut erhoben. Fortschritt berichtet erreichte Zustände pro Gast.
 3. **Ungeplanter Ausfall.** PVE signalisiert verlorenen Knoten und
-   Fencing-/Recovery-Zustand. Steward zeigt unklar, eingezäunt,
+   Fencing-/Recovery-Zustand. OpsTend zeigt unklar, eingezäunt,
    in Wiederanlauf oder am Ziel verifiziert, jeweils mit Quelle.
    Schreiboperationen, die den nativen Ablauf kreuzen, bleiben
    gesperrt. Keine erzwungene Steward-Übernahme eines mutmaßlich
    noch aktiven Gastes.
 4. **Rückkehr.** Neuer Readback für Quorum, native Platzierung und
-   Nutzdaten. Steward protokolliert Rückkehr oder nach nativer Policy
+   Nutzdaten. OpsTend protokolliert Rückkehr oder nach nativer Policy
    erfolgte Migration. Ein manueller Rückzug benötigt einen neuen Plan.
 
 | Szenario | Nachweis in PH01–PH03 |

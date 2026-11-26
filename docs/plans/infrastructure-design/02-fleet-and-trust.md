@@ -4,7 +4,7 @@ Karten FL01–FL03 in [Flotte](../fleet.md). Stand der Recherche 2026-11-24.
 Die Flotte verbindet eigenständige PVE-Installationen, Cluster, Linux-Hosts,
 Agenten und Geräte unter einer administrativen Sicht. Sie benötigt in M10
 genau einen autoritativen Koordinator. Der Übergang zu Quorum steht in
-[Steward HA](07-steward-ha.md).
+[OpsTend HA](07-steward-ha.md).
 
 ## Vergleich der Konsistenz- und Bedienmodelle
 
@@ -21,7 +21,7 @@ als `If-Match` darstellen. Serverseitige Vergleiche bleiben auch für
 CLI, interne Aufträge und Wiederanlauf verpflichtend. Kubernetes
 verwendet Ressourcen-Versionen vergleichbar für bedingte Änderungen und
 für den zuverlässigen Übergang von Snapshot zu Ereignisstrom. Die
-Protokolle inspirieren Steward, ohne einen Kubernetes-Betrieb einzuführen.
+Protokolle inspirieren OpsTend, ohne einen Kubernetes-Betrieb einzuführen.
 [HTTP If-Match](https://www.rfc-editor.org/rfc/rfc9110.html#name-if-match) ·
 [Kubernetes API Concepts](https://kubernetes.io/docs/reference/using-api/api-concepts/)
 
@@ -88,7 +88,7 @@ keine expliziten alten Berechtigungen oder Freigaben.
 Beobachtete externe Zustandsänderungen erhalten einen eigenen Actor-Beleg,
 soweit die Plattform ihn bereitstellt. Ein Extern-Writer kann auch ein
 PVE-Zeitplan, Terraform, native HA oder ein direkter Operator sein.
-Für explizit externe Aufgaben ist der Status verfügbar. Steward delegiert
+Für explizit externe Aufgaben ist der Status verfügbar. OpsTend delegiert
 einen bestimmten tolerierten Zweck und bleibt mit der lokalen Grenze
 kompatibel. Erfolg einer anderen Aktion wird nicht automatisch einem
 offenen Steward-Job zugerechnet.

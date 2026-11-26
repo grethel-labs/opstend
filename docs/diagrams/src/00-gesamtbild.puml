@@ -1,5 +1,5 @@
 @startuml
-title Steward auf einem Linux-Host – Dienste und Vertrauensgrenzen
+title OpsTend auf einem Linux-Host – Dienste und Vertrauensgrenzen
 top to bottom direction
 skinparam shadowing false
 skinparam defaultTextAlignment center
@@ -10,7 +10,7 @@ cloud "HTTPS-Empfänger" as receiver
 cloud "Restic-Ziel\n(Backup-Kandidat)" as restic
 
 node "Controller-Rechner" as ctlm #LightYellow {
-  component "Steward CLI und Ansible\nvalidate · plan · deploy" as cli
+  component "OpsTend CLI und Ansible\nvalidate · plan · deploy" as cli
 }
 
 node "Verwalteter Host" as srv #AliceBlue {

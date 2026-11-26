@@ -33,7 +33,7 @@ weiterhin ohne einen externen Datenbankdienst funktioniert.
 | Physisches Lab | Hostverlust, Watchdog/Fencing, unabhängige Boot- und Storage-Pfade, RPO/RTO, NAS-/LAN-/WAN-Abhängigkeit | Gate gilt nur für qualifizierte Topologie und genehmigte Testziele. |
 | Unabhängiger externer Restore | Offsite-Lesbarkeit, Schlüssel, isoliertes Ziel, Anwendungstest, dokumentierter RPO/RTO-Wert | Anwendbar auf tatsächlich getestete Daten, Backends und Standorte. |
 
-[Steward Testebenen](../../testing.md) ·
+[OpsTend Testebenen](../../testing.md) ·
 [Jepsen Consistency Models](https://jepsen.io/consistency/models) ·
 [NIST Contingency Planning Guide](https://csrc.nist.gov/pubs/sp/800/34/r1/upd1/final)
 
@@ -113,7 +113,7 @@ echten Zielpfaden verwenden ausdrücklich dafür freigegebene Testdaten.
 
 [Kubernetes: Beispiel für explizite Version Skew Policy](https://kubernetes.io/releases/version-skew-policy/) ·
 [SLSA Provenance](https://slsa.dev/spec/v1.2/provenance) ·
-[Steward Release-Karte S01](../repositories-release.md#s01--verifiable-signed-release-for-an-accepted-feature-subset)
+[OpsTend Release-Karte S01](../repositories-release.md#s01--verifiable-signed-release-for-an-accepted-feature-subset)
 
 ### Support-Matrix und Ergebnisdarstellung
 

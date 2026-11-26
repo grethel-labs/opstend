@@ -2,6 +2,7 @@ import { type FormEvent, useState } from "react";
 import type { PageProps } from "../App";
 import { ApiError, type Finding, type Unit, api } from "../api";
 import { Badge, Problem, time, useLoad } from "../hooks";
+import { Zorec, type ZorecGesture } from "../Zorec";
 
 const TONE: Record<Finding["severity"], "info" | "warn" | "bad"> = {
   info: "info",
@@ -25,6 +26,16 @@ function UnitRow({ unit }: { unit: Unit }) {
 
 const ADVICE_QUESTION_LIMIT = 500;
 const ADVICE_GAP = "Advice gap";
+
+function adviceGesture(busy: boolean, result: string, question: string): ZorecGesture {
+  if (busy) return "thinking";
+  // The advice endpoint returns formatted text with a fixed prefix for gaps.
+  if (result.startsWith("Advice gap: the AI budget is exhausted.")) return "limit";
+  if (result.startsWith("Advice gap: the provider is unavailable.")) return "offline";
+  if (result === ADVICE_GAP || result.startsWith(ADVICE_GAP + ":")) return "missing-data";
+  if (result) return "answered";
+  return question ? "listening" : "neutral";
+}
 
 function Advice({ onAuthLost }: PageProps) {
   const { data } = useLoad(api.advice, onAuthLost);
@@ -52,22 +63,30 @@ function Advice({ onAuthLost }: PageProps) {
   if (data?.enabled !== true) return null;
 
   return (
-    <section aria-labelledby="advice-heading">
-      <h2 id="advice-heading">Advice</h2>
+    <section className="card zorec-panel" aria-labelledby="advice-heading">
+      <div className="zorec-heading">
+        <Zorec gesture={adviceGesture(busy, result, trimmedQuestion)} />
+        <div>
+          <h2 id="advice-heading">Ask Zorec</h2>
+          <p className="muted">Ask about service health, backups, or vulnerabilities.</p>
+        </div>
+      </div>
       <form onSubmit={ask}>
         <label htmlFor="advice-question">Advice question</label>
-        <input
-          id="advice-question"
-          type="text"
-          maxLength={ADVICE_QUESTION_LIMIT}
-          value={question}
-          onChange={(event) => setQuestion(event.target.value)}
-        />
-        <button type="submit" disabled={busy || !trimmedQuestion}>
-          Ask for advice
-        </button>
+        <div className="zorec-question">
+          <input
+            id="advice-question"
+            type="text"
+            maxLength={ADVICE_QUESTION_LIMIT}
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+          />
+          <button type="submit" disabled={busy || !trimmedQuestion}>
+            {busy ? "Asking…" : "Ask Zorec"}
+          </button>
+        </div>
       </form>
-      <p role="status" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{result}</p>
+      <p className="advice-response" role="status">{result}</p>
     </section>
   );
 }
@@ -88,7 +107,7 @@ export function OverviewPage({ onAuthLost }: PageProps) {
       )}
       {status && (
         <>
-          <section className="tiles">
+          <section className="tiles" aria-label="Host summary">
             <div className="card">
               <span className="muted">Release</span>
               <strong>{status.release}</strong>
@@ -99,13 +118,19 @@ export function OverviewPage({ onAuthLost }: PageProps) {
             </div>
             <div className="card">
               <span className="muted">Firewall</span>
-              <strong>
-                {status.firewall.managed ? (status.firewall.loaded ? "loaded" : "NOT LOADED") : "unmanaged"}
-              </strong>
+              <span>
+                <Badge tone={!status.firewall.managed ? "info" : status.firewall.loaded ? "ok" : "bad"}>
+                  {status.firewall.managed ? (status.firewall.loaded ? "loaded" : "NOT LOADED") : "unmanaged"}
+                </Badge>
+              </span>
             </div>
             <div className="card">
               <span className="muted">Kill switch</span>
-              <strong>{status.kill_switch ? "ON – mutations stopped" : "off"}</strong>
+              <span>
+                <Badge tone={status.kill_switch ? "warn" : "info"}>
+                  {status.kill_switch ? "ON – mutations stopped" : "off"}
+                </Badge>
+              </span>
             </div>
             <div className="card">
               <span className="muted">Memory available</span>

@@ -41,7 +41,7 @@ together with `STATUS.md`; changing it changes the signed release.
   `env:NAME` reference also accepts PEM text.
 * The key must be an unencrypted PKCS#8 PEM Ed25519 key; passphrase handling is
   deliberately not part of this step.
-* Generate a pair: `./steward release keygen --private-out ~/.config/steward-release/key.pem --public-out release-key.pub`
+* Generate a pair: `./opstend release keygen --private-out ~/.config/opstend-release/key.pem --public-out release-key.pub`
   (refuses repository paths and never overwrites).
 * Publish the **public** key and its key id (printed by `keygen`, shown by
   `verify`) through a channel independent of the release download. Verifiers
@@ -52,19 +52,19 @@ together with `STATUS.md`; changing it changes the signed release.
 On the build host, leave `STEWARD_RELEASE_SIGNING_KEY_REF` unset and run the build and pack commands.
 
 ```bash
-./steward release build
-./steward release pack --output dist/steward-release-unsigned.tar.gz
+./opstend release build
+./opstend release pack --output dist/opstend-release-unsigned.tar.gz
 ```
 
 Transfer the unsigned archive to the offline operator. Compare its SHA-256 with
 the build receipt obtained through a trusted channel. On the offline machine, use
-a trusted Steward checkout with the controller environment already provisioned.
+a trusted OpsTend checkout with the controller environment already provisioned.
 
 ```bash
-./steward release sign steward-release-unsigned.tar.gz \
-  --signing-key-ref "file:$HOME/.config/steward-release/key.pem" \
-  --output steward-release.tar.gz
-./steward release verify steward-release.tar.gz --public-key release-key.pub
+./opstend release sign opstend-release-unsigned.tar.gz \
+  --signing-key-ref "file:$HOME/.config/opstend-release/key.pem" \
+  --output opstend-release.tar.gz
+./opstend release verify opstend-release.tar.gz --public-key release-key.pub
 ```
 
 `sign` checks artifact hashes, the subset, SBOM, provenance and clean source
@@ -98,10 +98,21 @@ the S01 acceptance gate. Verify the exact signed archive on an authorized fresh
 target and on a supported upgrade path. Check installation, unchanged redeploy,
 reboot, and the wrong-key, unsigned and tampered archive refusals.
 
+## Upgrading from Steward
+
+Use `./opstend` on the controller and `opstend-host` on hosts installed from
+an OpsTend release. The old commands remain available for existing scripts.
+Keep your current configuration, trusted release key and host state when
+upgrading. The host's privileged admission checks the `steward` wheel name
+exactly, and release signatures bind the original manifest bytes. OpsTend
+keeps this wheel identity along with the existing service names, accounts
+and protected paths. The new archive filename is `opstend-release-*.tar.gz`.
+
 ## CI handoff
 
 The release build is a single manually dispatched job with no inputs. Run it
-on the protected default branch of `grethel-labs/server-deploy-toolkit`.
+on the protected default branch of [`grethel-labs/opstend`](https://github.com/grethel-labs/opstend).
+Admission checks the repository's immutable GitHub ID and its owner.
 Protect the actual default branch with required pull requests and strict
 required GitHub Actions checks named `python`, `ansible`, and `webapp`. Each
 check must succeed and the PR branch must be up to date before merge. Forbid
@@ -144,7 +155,7 @@ incompatible with this setting. See
 [GitHub deployment controls](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/control-deployments).
 
 Download the candidate artifact for the exact attempt of a trusted, reviewed,
-successful run. It contains `steward-release-unsigned.tar.gz`, its SHA-256
+successful run. It contains `opstend-release-unsigned.tar.gz`, its SHA-256
 checksum file and `receipt.json`. Record the run URL, source commit and inner
 archive SHA-256 with the verification evidence. GitHub's artifact digest
 covers the Actions transport bundle. Compare the SHA-256 of the extracted
@@ -159,15 +170,15 @@ matching controller checkout for the signed archive's host acceptance.
 
 ## Deploy a signed archive
 
-Run `./steward` from a separately trusted controller checkout for the same
-Steward version as the release. The archive supplies the files installed on the
+Run `./opstend` from a separately trusted controller checkout for the same
+OpsTend version as the release. The archive supplies the files installed on the
 target. The controller checkout supplies the wrapper, Ansible playbooks, roles,
 connection plugin and controller dependency pins. Obtain the Ed25519 public key
 independently of the archive.
 
 ```bash
-./steward deploy --config config/server.yml --limit my-server \
-  --release-archive /path/to/steward-release.tar.gz \
+./opstend deploy --config config/server.yml --limit my-server \
+  --release-archive /path/to/opstend-release.tar.gz \
   --release-public-key /path/to/trusted-release-key.pub
 ```
 

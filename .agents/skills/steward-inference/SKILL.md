@@ -1,6 +1,6 @@
 ---
 name: steward-inference
-description: Change Steward optional AI providers, onboarding, isolated worker deployment, model selection, inference budgets, advice IPC or projection of sanitized evidence.
+description: Change OpsTend optional AI providers, onboarding, isolated worker deployment, model selection, inference budgets, advice IPC or projection of sanitized evidence.
 ---
 
 # Optional inference and advice

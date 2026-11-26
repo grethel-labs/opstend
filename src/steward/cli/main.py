@@ -1,6 +1,6 @@
-"""`steward` controller CLI.
+"""`opstend` controller CLI.
 
-    ./steward deploy --config ./config/server.yml --limit my-server
+    ./opstend deploy --config ./config/server.yml --limit my-server
 
 One call validates locally, runs a read-only remote preflight, checks for
 conflicting revisions, shows the plan, applies after authorisation and verifies
@@ -43,7 +43,11 @@ from ..core.secrets import (
     validate_admin_token,
 )
 
-ROOT = Path(os.environ.get("STEWARD_ROOT") or Path(__file__).resolve().parents[3])
+ROOT = Path(
+    os.environ.get("OPSTEND_ROOT")
+    or os.environ.get("STEWARD_ROOT")
+    or Path(__file__).resolve().parents[3]
+)
 WORK = ROOT / ".steward"
 RELEASE_DIR = ROOT / "dist" / "release"
 EXIT_INVALID, EXIT_FAILED, EXIT_UNAVAILABLE, EXIT_CONFLICT, EXIT_DEGRADED = 2, 1, 3, 4, 5
@@ -88,7 +92,7 @@ def check_secrets(cfg: Config) -> None:
         validate_admin_token(resolve(cfg.admin.token_ref))
     except SecretError as exc:
         problems.append(
-            f"admin.token_ref: {exc} (create one with: steward secrets init-admin-token)"
+            f"admin.token_ref: {exc} (create one with: opstend secrets init-admin-token)"
         )
     for endpoint in cfg.bot.endpoints:
         try:
@@ -166,7 +170,7 @@ def load_release() -> dict[str, Any]:
     manifest_path = RELEASE_DIR / "manifest.json"
     if not manifest_path.is_file():
         raise CliError(
-            f"no release found in {RELEASE_DIR}. Build one with: ./steward release build"
+            f"no release found in {RELEASE_DIR}. Build one with: ./opstend release build"
         )
     manifest = json.loads(manifest_path.read_text())
     for name, expected in manifest["files"].items():
@@ -179,7 +183,7 @@ def load_release() -> dict[str, Any]:
 
 def check_release_version(version: str, *, local: bool = False) -> None:
     if version != __version__:
-        hint = "; rebuild with: ./steward release build" if local else ""
+        hint = "; rebuild with: ./opstend release build" if local else ""
         raise CliError(f"release {version} does not match this CLI ({__version__}){hint}")
 
 
@@ -281,7 +285,7 @@ def cmd_release_pack(args: argparse.Namespace) -> int:
     if not manifest.is_file():
         raise CliError(f"no release found in {RELEASE_DIR}. Build one first")
     version = json.loads(manifest.read_text())["version"]
-    output = Path(args.output or ROOT / "dist" / f"steward-release-{version}.tar.gz")
+    output = Path(args.output or ROOT / "dist" / f"opstend-release-{version}.tar.gz")
     try:
         digest = release_tools.pack_release(RELEASE_DIR, output)
     except (release_tools.ReleaseError, OSError) as exc:
@@ -431,7 +435,7 @@ def ansible(
             raise CliError(
                 "the server's applied configuration changed during this deployment (for example "
                 "an executor-applied revision); nothing was overwritten. Run "
-                "`./steward config pull`, review and deploy again",
+                "`./opstend config pull`, review and deploy again",
                 EXIT_CONFLICT,
             )
         raise CliError(f"{playbook} failed (exit {proc.returncode}); see output above")
@@ -452,7 +456,7 @@ def preflight(cfg: Config, out: Path, args: argparse.Namespace) -> dict[str, Any
     say(
         f"    ok: {state['architecture']}, kernel {state['kernel']}, "
         f"{state['memtotal_mb']} MB RAM, "
-        f"{'existing steward installation' if state['installed'] else 'fresh host'}"
+        f"{'existing OpsTend installation' if state['installed'] else 'fresh host'}"
     )
     return state
 
@@ -589,7 +593,7 @@ def check_conflicts(cfg: Config, state: dict[str, Any], args: argparse.Namespace
         raise CliError(
             f"the API exports configuration revision {head[:12]} that differs from this file "
             "and the root desired revision; this may be pending UI work or an interrupted apply.\n"
-            f"Adopt it with: ./steward config pull --config {args.config} --limit {args.limit}\n"
+            f"Adopt it with: ./opstend config pull --config {args.config} --limit {args.limit}\n"
             "For a reviewed interrupted apply, bind --resume-from to the exact root desired hash; "
             "otherwise preserve or explicitly discard UI work with --discard-pending.",
             EXIT_CONFLICT,
@@ -609,7 +613,7 @@ def check_conflicts(cfg: Config, state: dict[str, Any], args: argparse.Namespace
         raise CliError(
             f"the server applied configuration revision {applied_rev[:12]}, which this file "
             "does not contain (another controller, or an executor-applied update).\n"
-            f"Adopt it with: ./steward config pull --config {args.config} --limit {args.limit} "
+            f"Adopt it with: ./opstend config pull --config {args.config} --limit {args.limit} "
             "(restart steward-api first if the pull returns the old revision), review, then "
             "plan again.",
             EXIT_CONFLICT,
@@ -972,10 +976,10 @@ def print_status(status: dict[str, Any], local_rev: str) -> bool:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    say(f"steward {__version__}, python {sys.version.split()[0]}")
+    say(f"opstend {__version__}, python {sys.version.split()[0]}")
     ansible_bin = Path(sys.executable).parent / "ansible-playbook"
-    say(f"ansible-playbook: {'ok' if ansible_bin.exists() else 'MISSING (run ./steward)'}")
-    say(f"collections: {'ok' if (WORK / 'collections').is_dir() else 'MISSING (run ./steward)'}")
+    say(f"ansible-playbook: {'ok' if ansible_bin.exists() else 'MISSING (run ./opstend)'}")
+    say(f"collections: {'ok' if (WORK / 'collections').is_dir() else 'MISSING (run ./opstend)'}")
     try:
         release = load_release()
         say(f"release: ok ({release['version']})")
@@ -1431,7 +1435,7 @@ def cmd_rollback(args: argparse.Namespace) -> int:
     except (OSError, ValueError, TypeError):
         raise CliError(
             "rollback response is unavailable or does not match the request; "
-            "check `steward status` before retrying"
+            "check `opstend status` before retrying"
         ) from None
     revision = result["config_revision"]
     say(f"Rolled back {project.id} to {result['image']} (configuration {revision}).")
@@ -1479,11 +1483,11 @@ def cmd_config_apply(args: argparse.Namespace) -> int:
     except (OSError, ValueError, TypeError):
         raise CliError(
             "apply response is unavailable or does not match the request; "
-            "check `steward status` before retrying"
+            "check `opstend status` before retrying"
         ) from None
     say(f"Applied revision {args.head[:12]} on the server ({result['state']}).")
     say(
-        "The server configuration changed: run `./steward config pull` to adopt it into your "
+        "The server configuration changed: run `./opstend config pull` to adopt it into your "
         "file before the next `plan`/`deploy`. Unused update approvals bound to the old "
         "revision are no longer valid."
     )
@@ -1501,7 +1505,7 @@ def cmd_ai(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="steward", description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(prog="opstend", description=__doc__.split("\n")[0])
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
 

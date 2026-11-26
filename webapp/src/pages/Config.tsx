@@ -143,7 +143,7 @@ export function ConfigPage({ onAuthLost }: PageProps) {
       const result = await api.commit(text, parent, message);
       setNotice(
         result.pending
-          ? `Saved revision ${result.revision}. It is pending: run "./steward config pull" and "./steward deploy" on the controller to apply it.`
+          ? `Saved revision ${result.revision}. It is pending: run "./opstend config pull" and "./opstend deploy" on the controller to apply it.`
           : `Revision ${result.revision} equals the applied configuration.`,
       );
       setDraft(current => current === draft
@@ -191,7 +191,7 @@ export function ConfigPage({ onAuthLost }: PageProps) {
               Apply on server
             </button>
           ) : (
-            <p>This revision needs <code>./steward deploy</code> ({plan.reason}).</p>
+            <p>This revision needs <code>./opstend deploy</code> ({plan.reason}).</p>
           )}
         </section>
       )}
@@ -209,8 +209,8 @@ export function ConfigPage({ onAuthLost }: PageProps) {
       )}
       {(plan || lastApply) && (
         <p className="muted">
-          On the controller, run <code>./steward config pull</code> to adopt the server head.
-          To apply a pending revision from the controller, pull it and run <code>./steward deploy</code>.
+          On the controller, run <code>./opstend config pull</code> to adopt the server head.
+          To apply a pending revision from the controller, pull it and run <code>./opstend deploy</code>.
         </p>
       )}
       <p className="muted">

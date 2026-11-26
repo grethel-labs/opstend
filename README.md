@@ -1,9 +1,37 @@
-# Server Deploy Toolkit (`steward`)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="webapp/public/brand/opstend-dark.svg" />
+    <img src="webapp/public/brand/opstend.svg" alt="" width="88" height="88" />
+  </picture>
+</p>
 
-Steward manages individual Linux servers. It hardens the host, deploys isolated
-applications, observes their running state and corrects deviations within
-configured limits. Core operation is deterministic.
+<h1 align="center">OpsTend</h1>
 
+<p align="center">
+  <strong>Self-hosted infrastructure operations</strong><br />
+  Harden a Linux host, deploy isolated apps, and keep watch after deployment.<br />
+  by <a href="https://github.com/grethel-labs">Grethel Labs</a>
+</p>
+
+<p align="center">
+  <a href="#quick-start"><kbd>Quick start</kbd></a>
+  <a href="docs/operations.md"><kbd>Operations</kbd></a>
+  <a href="docs/diagrams/README.md"><kbd>Diagrams</kbd></a>
+  <a href="docs/STATUS.md"><kbd>Status</kbd></a>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/readme/operations-dark.svg" />
+    <img src="docs/diagrams/readme/operations-light.svg" alt="OpsTend validates YAML and deploys an isolated workload. It observes health and findings, runs guarded actions when needed, and returns to observation." width="700" />
+  </picture>
+</p>
+
+<p align="center">
+  <sub>Rendered with <a href="https://github.com/grethel-labs/excaliplant">Excaliplant</a> · <a href="docs/diagrams/readme/operations.puml">PlantUML source</a></sub>
+</p>
+
+> [!NOTE]
 > **0.1.0rc1 source.** Earlier VM runs established the single-host baseline for
 > installation, repeat deployment, reboot and isolation. The candidate subset
 > also covers guarded configuration recovery, bounded project and host scanning,
@@ -13,6 +41,16 @@ configured limits. Core operation is deterministic.
 > [documentation index](docs/README.md).
 
 ## What a deployment sets up on the server
+
+| Capability | What it gives you |
+| --- | --- |
+| **Guarded deployment** | Review a plan before applying YAML and a signed release. SSH and firewall changes get syntax checks, rollback timers and a fresh-connection check. |
+| **Workload isolation** | Each project runs as a dedicated user with Rootless Podman. Traefik exposes configured routes and outbound traffic follows per-service rules. |
+| **Deterministic self-management** | The controller checks health and isolation, rechecks after guarded actions and escalates when limits are reached. Budgets and cooldowns limit retries. |
+| **Operator visibility** | The private console shows health, findings, configuration diffs, jobs and audit records. The kill switch pauses automatic changes while observation continues. |
+
+<details>
+<summary>Host components and safeguards</summary>
 
 - **Hardening:** nftables firewall (IPv4/IPv6, default drop), SSH drop-in,
   sysctls, bounded journald, automatic security updates. SSH and firewall
@@ -39,6 +77,25 @@ configured limits. Core operation is deterministic.
 - **Kill switch:** immediately stops automatic changes; observation and audit
   continue.
 
+</details>
+
+## Zorec
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="webapp/public/brand/zorec.svg?view=dark-neutral#dark-neutral" />
+  <img src="webapp/public/brand/zorec.svg" alt="Zorec, a small petrol-blue onboard computer" width="72" height="72" />
+</picture>
+
+Zorec is OpsTend's optional operations assistant. When the AI runtime is
+enabled, **Ask Zorec** in Overview helps explain service health, backup status
+and vulnerability findings. Answers include their sources, time range and
+gaps in the available data. Suggested actions follow the usual approval path.
+See [provider availability](docs/STATUS.md#card-state) for the current release gates.
+
+The name is a nod to **ZORAC**, the ship's computer in James P. Hogan's
+[*Giants' Star*](https://books.google.com/books?id=sB9seiMh38kC), who helps
+open a path into the opposing computer system JEVEX.
+
 ## Prerequisites
 
 **Target server:** an existing Ubuntu Server 26.04 LTS (x86_64) with systemd and
@@ -56,8 +113,8 @@ Node.js ≥ 22.
 ## Quick start
 
 For the signed RC1 path, start from a separately trusted controller checkout
-for the same Steward version as the archive. The checkout supplies
-`./steward`, the Ansible playbooks, roles and connection plugin, and the
+for the same OpsTend version as the archive. The checkout supplies
+`./opstend`, the Ansible playbooks, roles and connection plugin, and the
 controller dependency pins. The signed archive supplies the target wheel
 (including the web UI), runtime dependency pins and sample application bundles,
 along with the signed manifest, subset, SBOM and provenance. Obtain the Ed25519
@@ -71,21 +128,21 @@ mkdir -p config && cp examples/server.lan.yml config/server.yml
 $EDITOR config/server.yml            # adjust server.name, host, user
 
 # 2. Generate admin token (≥ 32 random bytes, 0600, outside Git, never displayed)
-./steward secrets init-admin-token --config config/server.yml
+./opstend secrets init-admin-token --config config/server.yml
 
 # 3. Verify the signed archive, validate configuration and deploy
-./steward release verify /path/to/steward-release.tar.gz \
+./opstend release verify /path/to/opstend-release.tar.gz \
   --public-key /path/to/trusted-release-key.pub
-./steward validate --config config/server.yml --limit my-server
-./steward deploy --config config/server.yml --limit my-server \
-  --release-archive /path/to/steward-release.tar.gz \
+./opstend validate --config config/server.yml --limit my-server
+./opstend deploy --config config/server.yml --limit my-server \
+  --release-archive /path/to/opstend-release.tar.gz \
   --release-public-key /path/to/trusted-release-key.pub
 
 # 4. Check status
-./steward status   --config config/server.yml --limit my-server
+./opstend status   --config config/server.yml --limit my-server
 ```
 
-The first invocation of `./steward` sets up a pinned, hash-verified controller
+The first invocation of `./opstend` sets up a pinned, hash-verified controller
 environment (Ansible, collections) under `.steward/`.
 
 `deploy` requires the signed archive and trusted key from RC1 onward. It checks
@@ -107,7 +164,7 @@ the default source scope. If no address qualifies or several qualify, set
 Use `admin.lan.allowed_sources` for explicit RFC1918 source CIDRs. Automatic
 redeployment reuses the applied scope. Set the pair explicitly to change it.
 Browser drafts for LAN access also require the explicit pair. Use
-`./steward deploy` to activate a new scope or switch back to loopback.
+`./opstend deploy` to activate a new scope or switch back to loopback.
 
 On an existing guarded (schema 2) installation whose release predates LAN
 support, run two ordinary signed deployments. First upgrade the release using
@@ -133,14 +190,14 @@ ssh -N -p 22 -L 9443:127.0.0.1:9443 deploy@my-server
 ### Kill switch
 
 ```bash
-./steward killswitch on --config config/server.yml --limit my-server
+./opstend killswitch on --config config/server.yml --limit my-server
 # or directly on the server, independently of the web UI and controller:
-sudo /opt/steward/current/venv/bin/steward-host killswitch on
+sudo /opt/steward/current/venv/bin/opstend-host killswitch on
 ```
 
 ## Commands
 
-Run `./steward --help` for command options. These are the usual controller entry
+Run `./opstend --help` for command options. These are the usual controller entry
 points.
 
 | Command | Purpose |
@@ -196,7 +253,8 @@ tests/integration/local_rootless.sh        # real Rootless Podman test, no root
 ```
 
 See the [working guide](docs/working-guide.md), [testing guide](docs/testing.md)
-and [contribution rules](CONTRIBUTING.md) before changing Steward.
+and [contribution rules](CONTRIBUTING.md) before changing OpsTend.
+The [brand guide](docs/branding.md) covers the shared assets and UI tokens.
 
 ## License
 

@@ -1,4 +1,4 @@
-# Nach RC1: Steward als Infrastrukturverwaltung
+# Nach RC1: OpsTend als Infrastrukturverwaltung
 
 **Status:** geplant, 2026-11-24. Start nach dem RC1-Abschluss gemäß
 [goal.md](goal.md). Dieser Plan führt den Fahrplan mit M9–M15 bis RC2 fort.
@@ -8,7 +8,7 @@ Karte unten ausdrücklich genannt wird.
 
 ## Ziel und Reihenfolge
 
-Ein Operator installiert Steward nativ auf einem einzelnen Proxmox-VE-Host,
+Ein Operator installiert OpsTend nativ auf einem einzelnen Proxmox-VE-Host,
 bindet weitere Installationen zu einer gemeinsamen Flotte zusammen und verwaltet
 Proxmox-Cluster, eigenständige Hosts, Linux-Server und ausgewählte Geräte in
 einer Oberfläche. Gemeinsame Richtlinien, Backup-Ziele und eine Quellenangabe
@@ -23,7 +23,7 @@ Steward-Dienste werden nach Bedarf auf geeigneten Rechnern platziert.
 | M11 · Externe Backups | [BK09–BK11](plans/fleet.md#bk09--gemeinsame-backup-richtlinien-und-zielkatalog) | Gemeinsamer Zeitplan, Quoten und Katalog für PVE/PBS und Linux/Restic. Zwei echte Wiederherstellungen aus einem unabhängigen Standort mit Nutzdatenprüfung. | geplant |
 | M12 · Proxmox HA | [PH01–PH03](plans/proxmox.md#ph01--ha-inventar-und-eignungsprüfung) | Bestehendes HA-Cluster mit drei Knoten integriert. Anwendbarkeit, geplante Wartung und echter Fencing-/Quorum-Test für je einen ausgewählten VM- und LXC-Gast belegt. | geplant |
 | M13 · Server, Geräte und Dashboard | [IN01–IN03](plans/infrastructure.md#in01--eigenständige-linux-server) | Lokale und externe Linux-Ziele sowie ausdrücklich eingebundene Geräte erscheinen mit Inventar, Topologie, Messwerten, Backup- und Ereignisansichten in einer Oberfläche. Rollen gelten auch für Beziehungen. | geplant |
-| M14 · Hochverfügbares Steward | [CP01–CP03](plans/infrastructure.md#cp01--replizierter-steuerzustand-und-wiederanlauf) | Eine aktive Instanz je freigegebener Rolle, ein bis zwei betriebsbereite Ersatzinstanzen nach Richtlinie, automatischer Rollenwechsel innerhalb eines Standorts mit 2-von-3-Quorum und geprüfter Schreibsperre für alte Instanzen. | geplant |
+| M14 · Hochverfügbares OpsTend | [CP01–CP03](plans/infrastructure.md#cp01--replizierter-steuerzustand-und-wiederanlauf) | Eine aktive Instanz je freigegebener Rolle, ein bis zwei betriebsbereite Ersatzinstanzen nach Richtlinie, automatischer Rollenwechsel innerhalb eines Standorts mit 2-von-3-Quorum und geprüfter Schreibsperre für alte Instanzen. | geplant |
 | M15 · RC2 | [IR01–IR02](plans/infrastructure.md#ir01--integrierte-abnahme-der-referenzflotte) | Integrierte Abnahme einer gemischten Flotte mit acht PVE-Hosts, NAS und externen Linux-Servern, unabhängige Wiederherstellung, Upgrade aus RC1 und signierte Veröffentlichung mit nachvollziehbarer Support-Matrix. | geplant |
 
 M9–M15 werden in dieser Reihenfolge begonnen. Unabhängige Zeit- und Host-Gates
@@ -42,9 +42,9 @@ konfigurierbaren Standorten, Ressourcen, Fähigkeiten und Rollen zusammen.
 
 | System | Anschluss und geplante Rolle |
 |---|---|
-| **3 Intel NUCs mit Proxmox VE** | Drei Mitglieder eines PVE-HA-Clusters. Steward führt das Cluster als eine PVE-Instanz und zeigt die einzelnen Knoten sowie HA-Eignung und tatsächliche Platzierung je Gast. |
+| **3 Intel NUCs mit Proxmox VE** | Drei Mitglieder eines PVE-HA-Clusters. OpsTend führt das Cluster als eine PVE-Instanz und zeigt die einzelnen Knoten sowie HA-Eignung und tatsächliche Platzierung je Gast. |
 | **4 weitere Intel NUCs mit Proxmox VE** | Vier eigenständige PVE-Instanzen mit gemeinsamem Inventar und Richtlinien. Geeignete NUCs können Steward-Steuerung oder einen lokalen Backup-Dienst beherbergen. |
-| **Beelink GTR9 Pro mit Proxmox VE** | Fünfte eigenständige PVE-Instanz mit höher eingestelltem RAM. Steward zeigt seine VMs und LXC. Für einen späteren KI-Container wird eine ausdrückliche Hostzuordnung mit RAM-Reserve vorgesehen. Die Dienstplatzierung berücksichtigt diese Reserve. |
+| **Beelink GTR9 Pro mit Proxmox VE** | Fünfte eigenständige PVE-Instanz mit höher eingestelltem RAM. OpsTend zeigt seine VMs und LXC. Für einen späteren KI-Container wird eine ausdrückliche Hostzuordnung mit RAM-Reserve vorgesehen. Die Dienstplatzierung berücksichtigt diese Reserve. |
 | **Raspberry Pi mit 2 × 2 TB NVMe-SSDs** | Vorläufiges lokales NAS. Die Oberfläche zeigt den NAS-Dienst, die zugeordneten Freigaben und lesend gemeldete Erreichbarkeit und Kapazität. Nutzbare Kapazität und Plattenredundanz folgen dem tatsächlich gewählten Layout. |
 | **2 externe vServer mit Ubuntu 26.04 LTS** | Je 8 GB RAM und 4 vCPU. Anbindung als eigenständige Linux-Hosts über ausgehende Agentenverbindungen. Mögliche Rollen sind externe Erreichbarkeitsbeobachtung auf einem Host und ein verschlüsseltes Restic-Ziel auf dem anderen, sofern Speicher und Durchsatz passen. |
 
@@ -98,7 +98,7 @@ flowchart TB
 
 | Ebene | Führende Instanz | Verhalten bei Ausfall |
 |---|---|---|
-| VM, LXC, Bridge, Datastore, PVE-Task und Gastplatzierung | PVE-API und bei HA der PVE-HA-Manager. Steward zeigt deren tatsächlichen Zustand, prüft Vorbedingungen und beauftragt zugelassene Aktionen. | PVE führt Gast-Failover und Fencing selbst durch. Steward blockiert koordinierte Schreibaktionen bei fehlender Autorität oder unklarem Zustand. |
+| VM, LXC, Bridge, Datastore, PVE-Task und Gastplatzierung | PVE-API und bei HA der PVE-HA-Manager. OpsTend zeigt deren tatsächlichen Zustand, prüft Vorbedingungen und beauftragt zugelassene Aktionen. | PVE führt Gast-Failover und Fencing selbst durch. OpsTend blockiert koordinierte Schreibaktionen bei fehlender Autorität oder unklarem Zustand. |
 | Lokale Linux-Anwendungen | Der registrierte Steward-Executor des Hosts führt freigegebene RC1-Aktionen aus und protokolliert sie lokal. | Laufende Workloads und hostlokal verantwortete RC1-Funktionen arbeiten nach ihrer bestehenden Policy weiter. Flottenverwaltete Jobs brauchen eine gültige Freigabe des zuständigen Koordinators. |
 | Flottenrichtlinien, Freigaben und Rollen | Ab M10 eine führende Koordination; ab M14 optional ein replizierter Steuerzustand mit Quorum. Jede verfügbare UI-Instanz wendet die Rollen der Flotte an. | Eine Quorum-Mehrheit kann die Steward-Rolle neu vergeben. Die Minderheit kann datierte Informationen für bereits bestehende Sitzungen innerhalb einer begrenzten, zuvor bestätigten Lesefreigabe zeigen. Neue Sitzungen und Schreibzugriffe brauchen eine erreichbare Autorität. |
 | Backup-Daten und Gerätebeobachtung | PBS oder Restic halten die Daten. Geräte liefern Beobachtungen über Einzeladapter oder einen Agenten im Zielnetz. | Backends und nativ verantwortete Zeitpläne laufen eigenständig. Die UI zeigt Zeitstempel und Erreichbarkeit. Ein Ausfall löst keine erfolgreiche Backup- oder Gesundheitsmeldung aus. |
@@ -178,13 +178,13 @@ Gastdisks und Steward-Quorum-Datenträger auf separat geprüften Speichern.
 [PBS-Systemanforderungen](https://pbs.proxmox.com/docs/installation.html#system-requirements) ·
 [Steward-Backup-Grundlage](backup-foundation.md)
 
-Beim Proxmox-HA-Pfad prüft Steward Quorum, Storage-Zugriff oder qualifizierte
+Beim Proxmox-HA-Pfad prüft OpsTend Quorum, Storage-Zugriff oder qualifizierte
 Replikation, Netzkompatibilität und die Platzierbarkeit der Gäste. Für einen
 Gast mit lokalem Passthrough oder gebundenem Storage kann der Prüfbericht
 bestimmte Ziele ausschließen. Asynchrone Storage-Replikation wird mit dem
 möglichen Datenverlust seit der letzten Replikation angezeigt. Der native
 HA-Manager entscheidet über Fencing und Wiederanlauf. Aus der PVE-Beobachtung
-leitet Steward ausdrücklich ab, ob ein Gast noch migriert, bereits auf einem
+leitet OpsTend ausdrücklich ab, ob ein Gast noch migriert, bereits auf einem
 anderen Knoten läuft oder der Zustand ungeklärt ist.
 [Proxmox HA Manager](https://github.com/proxmox/pve-docs/blob/master/ha-manager.adoc) ·
 [Proxmox Storage Replication](https://github.com/proxmox/pve-docs/blob/master/pvesr.adoc)
@@ -243,7 +243,7 @@ Verbindungsnachweise brauchen jeweils eigene Evidenz. Offline und veraltet
 verwenden eigene Zustände. Graph und Listenansicht filtern dieselben
 berechtigten Objekte vor der Aggregation, einschließlich Kanten und Zählwerten.
 Die wichtigste Überschneidung mit Proxmox Datacenter Manager liegt bei
-PVE/PBS-Inventar und Gastaktionen. Steward bindet PVE und PBS über ihre
+PVE/PBS-Inventar und Gastaktionen. OpsTend bindet PVE und PBS über ihre
 nativen APIs ein und verbindet diese Ansichten mit Linux, Geräten,
 Richtlinien und Wiederherstellungsnachweisen.
 [Proxmox Datacenter Manager](https://pdm.proxmox.com/docs/introduction.html)
@@ -291,7 +291,7 @@ Richtlinien und Wiederherstellungsnachweisen.
 
 - [Proxmox nativ und Proxmox HA](plans/proxmox.md)
 - [Flottenverwaltung und externe Backups](plans/fleet.md)
-- [Server, Geräte, Steward HA und RC2](plans/infrastructure.md)
+- [Server, Geräte, OpsTend HA und RC2](plans/infrastructure.md)
 
 Der [Recherche- und Architekturindex](plans/infrastructure-design/README.md)
 führt pro Themengebiet Varianten, Primärquellen, Entscheidungspunkte und

@@ -1,0 +1,16 @@
+@startditaa
+/------------------\      /------------------\
+| Configure        |      | Deploy           |
+| Validated YAML   +----->| Harden & isolate |
+\------------------/      \--------+---------/
+                                   |
+                                   v
+/------------------\      /------------------\
+| Correct          |      | Observe          |
+| Guarded action   |<-----+ Health & findings|
+\--------+---------/      \------------------/
+         :                         ^
+         :                         :
+         +=========================+
+                  Recheck after action
+@endditaa

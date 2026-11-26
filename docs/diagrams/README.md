@@ -38,3 +38,14 @@ docs/diagrams/render.sh src/03-deploy-und-revisionen.puml
 Prüfe nach einer Änderung die gerenderten Texte und Pfeile. Checke die
 aktualisierte Quelle zusammen mit den SVG- und Excalidraw-Exporten unter
 [`out/`](out/) ein. PNG-Exporte lassen sich bei Bedarf lokal erzeugen.
+
+Die Grafik im [Projekt-README](../../README.md) entsteht aus
+[`readme/operations.puml`](readme/operations.puml). Ihre beiden SVG-Varianten
+verwenden dieselbe gepinnte Excaliplant-Version und eine kurze Hervorhebung
+des Rückwegs zur Beobachtung. Der Browser berücksichtigt die Einstellung
+für reduzierte Bewegung.
+
+```sh
+npm --prefix docs/diagrams ci --ignore-scripts
+node docs/diagrams/render-readme.mjs
+```
