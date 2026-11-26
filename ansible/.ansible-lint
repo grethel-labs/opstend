@@ -1,0 +1,11 @@
+---
+profile: production
+offline: true
+skip_list:
+  # Shared task files and cross-role facts (steward_uids) intentionally use
+  # their own prefixes.
+  - var-naming[no-role-prefix]
+  # SSH and firewall changes are applied inline, armed with a rollback timer and
+  # proven by a new connection before the play continues. A handler would run
+  # too late for that sequence.
+  - no-handler
