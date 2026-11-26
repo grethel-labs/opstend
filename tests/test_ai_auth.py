@@ -98,7 +98,7 @@ def test_default_methods_refuse_before_state_or_runner_access(action):
     [
         ("ollama-cloud", "dedicated cloud-enabled daemon outside the local CPU namespace"),
         ("claude-subscription", "unattended third-party subscription inference is unconfirmed"),
-        ("chatgpt-subscription", "ChatGPT plan eligibility for Steward's unattended service"),
+        ("chatgpt-subscription", "ChatGPT plan eligibility for OpsTend's unattended service"),
     ],
 )
 def test_default_methods_report_distinct_operator_refusal_reasons(method, reason, capsys):
