@@ -12,13 +12,15 @@ verwendet aufgenommene Ressourcen und Fähigkeiten.
 | NUC 1–3 | Drei Nodes einer PVE-Instanz | Bestätigte API-Endpunkte, optional native Steward-Agenten | QEMU, LXC, native HA, Quorum, Storage, Netz und Wartung. PVE-Instanz und drei Host-IDs bleiben separat sichtbar. |
 | NUC 4–7 | Vier eigenständige PVE-Instanzen | Nativer Agent oder Connector | Gäste, einzelne Jobs, Backup und Host-Ressourcen. Einzeln verwaltbar und als Gruppe filterbar. |
 | Beelink GTR9 Pro | Eigenständige PVE-Instanz | Wie andere PVE-Einzelhosts, plus explizite Fähigkeits- und Reservemeldung | VMs/LXC und später ein hostgebundener KI-Container. Tatsächlich beobachtete Reserven und Host-/Gast-RAM getrennt führen. |
+| Lokaler Ubuntu-Teilnehmer | Podman-/Quadlet-Host oder registrierter PVE-Gast | Linux-Agent, eigener Zielkontext und interner VPN-Teilnehmer | OCI-Container, registrierter Health-Check, Arbeitslast und Netzpfade aus IN01 und NX02. |
+| UniFi Cloud Gateway und Switch | Netzgeräte im lokalen Standort | UniFi-Connector mit qualifiziertem Modell und API-Version | Beobachtete Clients, Ports, VLANs, Regeln und reversible Änderung nach NX04. |
 | Raspberry Pi | Lokales Gerät und NAS, 2 × 2 TB NVMe | Lesend über registrierten Connector oder vorhandenen Metrikendpunkt | Freigabe, freier und nutzbarer Speicher, Erreichbarkeit, eigene Standortabhängigkeit. |
-| Externer vServer A | Ubuntu 26.04 LTS, 8 GB RAM, 4 vCPU | Ausgehender Linux-Agent | Externer Beobachtungsstandort für ausdrücklich registrierte Dienste, optional Host-Workloads mit eigenem Executor. |
-| Externer vServer B | Ubuntu 26.04 LTS, 8 GB RAM, 4 vCPU | Ausgehender Linux-Agent und gegebenenfalls eigenes Backup-Profil | Optionales Restic-HTTPS-Ziel, soweit Quota, Speicher, Kosten, Restore und unabhängige Ausfalldomäne passen. |
+| Externer vServer A | Ubuntu 26.04 LTS, 8 GB RAM, 4 vCPU | Ausgehender Linux-Agent | VPN-Host, HTTPS-Proxy und separates Zugangsportal. |
+| Externer vServer B | Ubuntu 26.04 LTS, 8 GB RAM, 4 vCPU | Ausgehender Linux-Agent und getrenntes Sicherungsprofil | Externer Prüfpunkt. Restic-HTTPS-Ziel, wenn Speicher, Restore und unabhängige Ausfalldomäne qualifiziert sind. |
 
-Das ergibt sechs PVE-Instanzen mit acht physischen PVE-Nodes, zwei
-externen Linux-Zielen und einem explizit
-registrierten NAS. Ein lokal betriebener PBS-Dienst oder ein
+Das ergibt sechs PVE-Instanzen mit acht physischen PVE-Nodes, einen
+lokalen Ubuntu-Teilnehmer, zwei externe Linux-Ziele, UniFi und ein
+registriertes NAS. Ein lokal betriebener PBS-Dienst oder ein
 Management-Gast ist eine zusätzliche Software-/Workload-Ressource
 unter seinem tatsächlichen Host. Er zählt nicht als weiterer
 physischer Host. Standort- und Hostbeziehungen behalten die
@@ -59,17 +61,29 @@ devices:
     site: local-lab
     capabilities: [capacity-observation, share-observation]
     raw_disks: [2 TB NVMe, 2 TB NVMe]
+  - id: unifi-gateway
+    site: local-lab
+    capabilities: [adopted-device-observation, vlan-observation]
+  - id: local-switch
+    site: local-lab
+    capabilities: [port-observation]
 linux_targets:
+  - id: ubuntu-local
+    site: local-lab
+    os: Ubuntu 26.04 LTS
+    roles: [podman-runtime, vpn-peer]
   - id: vps-a
     site: external-a
     os: Ubuntu 26.04 LTS
     memory: 8 GB
     vcpu: 4
+    roles: [vpn-host, https-proxy, remote-access-portal]
   - id: vps-b
     site: external-b
     os: Ubuntu 26.04 LTS
     memory: 8 GB
     vcpu: 4
+    roles: [external-probe]
 control_plane:
   candidate_voters: [management-on-nuc-1, management-on-nuc-4, management-on-nuc-5]
   active_per_role: 1
@@ -91,6 +105,8 @@ CP01 prüft.
 | Tatsächliches PVE-Release, Plattform-ID, CPU-Generation/Architektur, Firmware und Microcode pro Host | Unterstützte Adapteroperationen und zulässige Migrationsziele | PX01, PH01 |
 | RAM absolut sowie für Host und Workloads freier und reservierter Anteil, Storage und I/O-Latenz | Eignung für Gastmigration, Quorum und KI; Reservebedarf bei Einzelausfall | PH01, CP03 |
 | Schnittstellen, Netzpfade und Volllast-Jitter | Corosync, Backup- und Migrationsbudgets, getrennte Quorum-Pfade | PH01, CP01 |
+| Gateway-/Switchmodell, Firmware, Network-Version, Linkrate und Test-VLAN | Lesescope, belegter Kabelpfad und reversible Änderung mit geprüftem Verwaltungszugang | IN02, NX04 |
+| Freigegebene DNS-Zone, Zertifikatsprofil, Gruppen, Zeitquelle und externe Testziele | Funktionsfähige Veröffentlichung und separater Portalzugriff | NX01–NX03 |
 | Pi-Modell, NVMe-Anschluss und Layout, Protokoll, messbare Kapazität und Zuständigkeit | NAS-Aufnahme, Aufbewahrung, Verfügbarkeit von Freigaben und lokales Backup | BK09, IN02 |
 | Untertyp der Servervirtualisierung, CPU-Architektur, Systemd, Disk- und Transferquoten, Provider/Region | Linux-Capabilities, externes Restic-Ziel, erreichbarer Recovery-Pfad | BK09, IN01 |
 | Native Gast-Disks, Bind-Mounts, optionale Geräte und Anwendungen mit eigenem Datenpfad | Tatsächliche Backupdeckung, Eignung für HA und konkrete Nutzdatenprobe | BK09, PH01 |
@@ -137,7 +153,7 @@ Versionen, Testrollen und Fehlerdomänen, die fürs Ergebnis nötig sind.
 | Ein einzelner Nicht-HA-Host | PVE-HA-Gruppe, andere Einzelhosts und bei verbleibender Mehrheit die Steward-Rolle. | Seine nativen Gäste bis Hostwiederkehr oder Restore; lokal gebundene Geräte und Jobs. |
 | Beelink | Deterministische Verwaltung, solange ihre Pfade weiter verfügbar sind. | KI-Dienst und Geräte-/Cache-gebundene Workloads auf diesem Host. |
 | Raspberry Pi | Unabhängige PVE-Gastdisks, Steuerzustand sowie separat bereitgestellte Offsite-Ziele. | Betroffene Freigaben, abhängige Dienste und lokale Export-/Backup-Ziele. |
-| WAN oder ein externer vServer | Lokal erreichbare Steuerung, lokales PVE-Quorum und lokale Jobs nach ihrer jeweiligen Policy. | Site-spezifische Beobachtung, Zielerreichbarkeit, Backlog und externes Kopier-RPO. |
+| WAN oder ein externer vServer | Lokal erreichbare Steuerung, lokales PVE-Quorum und lokale Jobs nach ihrer jeweiligen Policy. | Tunnel, HTTPS-Erreichbarkeit, Portal, externe Beobachtung und Kopier-RPO je betroffener Rolle. |
 | Vollständiger lokaler Standortverlust | Die tatsächlich qualifizierte externe Recovery- und Backup-Evidenz. | Beide lokalen Mehrheiten. Ein Wiederaufbau startet autorisiert in neuer Steward-Generation. |
 
 Die Fehlerfälle werden gezielt und einzeln innerhalb der vorgesehenen

@@ -8,7 +8,7 @@ unchanged redeploy and reboot. See [STATUS](STATUS.md) for the S01 gate state.
 
 | Operating system | x86_64 | arm64 |
 |---|---|---|
-| Ubuntu Server 26.04 LTS | **Baseline tested** on Proxmox/KVM, including repeat deployment, isolation and reboot; 8 GiB guest accepted again after reset; earlier emulated test also retained | Unsupported (S02). Preflight permits `aarch64`, and the profile has no installation evidence. |
+| Ubuntu Server 26.04 LTS | **Baseline tested** on Proxmox/KVM at `31f0eff`, including repeat deployment, isolation and reboot; 8 GiB guest accepted again after reset; earlier emulated test also retained | Unsupported (S02). Preflight permits `aarch64`, and the profile has no installation evidence. |
 | Ubuntu Server 24.04 LTS | Unsupported (rejected by preflight) | Unsupported |
 | Debian | Unsupported (rejected by preflight) | Unsupported |
 | RHEL-compatible | Unsupported (rejected by preflight; SELinux path missing) | Unsupported |
@@ -21,10 +21,12 @@ administration with OIDC/MFA (S03) is unsupported and public configuration
 validation rejects `admin.access: public`. Private administration supports
 `private-loopback` over an SSH tunnel and `private-lan` for RFC1918 IPv4 guest
 addresses and source networks. The previous `private` value and omitted access
-setting use loopback. Private LAN host acceptance is pending. A private IPv4
-alias must use the same admin port as the guest. Clients must trust the
-installation's internal CA. Scope changes use the normal deploy path with
-staged firewall verification on schema 1 and guarded admission on schema 2.
+setting use loopback. The routed private IPv4 profile passed on the earlier
+VM104 candidate. A directly bridged client and acceptance of the final signed
+archive remain open. A private IPv4 alias must use the same admin port as the
+guest. Clients must trust the installation's internal CA. Scope changes use
+the normal deploy path with staged firewall verification on schema 1 and
+guarded admission on schema 2.
 Upgrading an older schema 2 installation to LAN mode takes two signed deploys.
 
 The candidate subset draws on earlier host evidence for the single-host
@@ -36,7 +38,7 @@ acceptance remain open. See [card state](STATUS.md#card-state).
 ## Controller machine
 
 Signed deployment uses a separately trusted controller checkout at the matching
-OpsTend version and an independently obtained release public key. These rows
+Steward version and an independently obtained release public key. These rows
 record source and bootstrap evidence. See the [signed deployment process](release.md#deploy-a-signed-archive).
 
 | System | Status |
@@ -65,6 +67,7 @@ project limits, plus 5 GiB free disk space. Measured requirements will be
 published only after tests on real hardware.
 
 A Proxmox/KVM guest matching the intended server allocation (4 vCPU, 8 GiB RAM,
-24 GiB disk) passed two fresh installations and the baseline acceptance checks.
-Scanning was disabled. This allocation is evidence for the tested baseline.
-Minimum sizing for scanning, backups and AI workloads remains unmeasured.
+24 GiB disk) passed two fresh installations and full acceptance at `31f0eff`.
+Its post-reset idle measurement reported about 7,214 MiB available memory and
+3.33 GiB disk used. Scanning was disabled; this is a tested allocation, not a
+minimum or a benchmark for scanning, backups or AI workloads.

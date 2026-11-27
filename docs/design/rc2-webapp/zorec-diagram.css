@@ -1,0 +1,37 @@
+.zorec-diagram .zorec-activity-heading { min-width: 0; overflow-wrap: anywhere; }
+.zorec-diagram-body { display: grid; align-content: start; gap: 10px; padding: 12px 14px; }
+.zorec-diagram-kind { display: flex; align-items: center; justify-content: space-between; gap: 9px; color: var(--muted); font-size: .8rem; }
+.zorec-diagram-kind select {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--panel-muted);
+}
+.zorec-diagram-viewport {
+  max-width: 100%;
+  max-height: clamp(150px, 44dvh, 390px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.zorec-diagram-viewport:empty { display: none; }
+.zorec-diagram-viewport svg { display: block; max-width: max(100%, 300px); height: auto; margin: 6px auto; }
+.zorec-diagram-viewport svg text { pointer-events: none; }
+.zorec-diagram-viewport svg [data-zorec-diagram-highlight] [data-excaliplant-variant] > :is(rect, path, ellipse, polygon) {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+.zorec-diagram-points { display: flex; align-items: start; flex-wrap: wrap; gap: 5px; }
+.zorec-diagram-points .button { min-height: 32px; padding: 4px 7px; }
+.zorec-diagram-points [aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.zorec-diagram-status, .zorec-diagram-detail { color: var(--muted); font-size: .78rem; line-height: 1.4; overflow-wrap: anywhere; }
+.zorec-diagram-status:empty { display: none; }
+.zorec-diagram-detail { align-self: start; min-height: 2.2em; }
+@media (max-width: 520px) {
+  .zorec-diagram-points .button { min-height: 40px; }
+  .zorec-diagram-kind select { max-width: 66%; min-height: 42px; font-size: 1rem; }
+}

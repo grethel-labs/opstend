@@ -1,0 +1,21 @@
+@startditaa
+/------------------\    /------------------------\
+| Externe Nutzer   +--->| edge‑01 · extern       |
+\------------------/    | Proxy und Portal       |
+      HTTPS / Portal    \------------+-----------/
+                                     :
+                         WireGuard   :
+                                     v
+                        /------------------------\
+                        | Interner Connector     |
+                        | Werkstatt              |
+                        \------------+-----------/
+                                     |
+            +------------------------+
+            |                        |
+            v                        v
+/----------------------\  /----------------------\
+| LXC Fotos            |  | VM Entwicklung       |
+| Freigegebenes HTTPS  |  | Freigegebenes SSH    |
+\----------------------/  \----------------------/
+@endditaa

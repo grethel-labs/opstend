@@ -1,0 +1,560 @@
+.manage-screen {
+  min-width: 0;
+}
+
+.manage-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 1.15fr);
+  align-items: start;
+  gap: 20px;
+}
+
+.manage-settings-layout {
+  grid-template-columns: minmax(0, 1.65fr) minmax(280px, 1fr);
+}
+
+.manage-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+}
+
+.manage-panel-heading h2,
+.manage-empty h2 {
+  font-size: 1.14rem;
+  letter-spacing: -.02em;
+  margin: 0;
+}
+
+.manage-panel-heading p,
+.manage-empty p {
+  color: var(--muted);
+  margin: 4px 0 0;
+  line-height: 1.4;
+}
+
+.manage-panel-heading .eyebrow {
+  margin: 0 0 6px;
+}
+
+.manage-layout > .panel,
+.manage-screen > .manage-policies {
+  padding: clamp(15px, 2vw, 22px);
+}
+
+.manage-jobs .manage-panel-heading {
+  margin-bottom: 14px;
+}
+
+.manage-job {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 13px;
+  margin-top: 5px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.manage-job:hover,
+.manage-tab:hover {
+  background: var(--panel-muted);
+}
+
+.manage-job[aria-pressed="true"],
+.manage-tab[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+  color: var(--text);
+}
+
+.manage-job:focus-visible,
+.manage-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.manage-job-icon,
+.manage-outcome-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: color-mix(in srgb, currentColor 13%, transparent);
+  font-weight: 700;
+}
+
+.manage-outcome-icon {
+  width: 34px;
+  height: 34px;
+}
+
+.manage-tone-success,
+.manage-outcome-success .manage-outcome-icon {
+  color: var(--success);
+}
+
+.manage-tone-warn,
+.manage-outcome-warn .manage-outcome-icon {
+  color: var(--warn);
+}
+
+.manage-job-name {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.manage-job-name strong {
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.manage-job-name small,
+.manage-inheritance small {
+  color: var(--muted);
+}
+
+.manage-job-status {
+  font-size: .76rem;
+  font-weight: 650;
+}
+
+.manage-job time,
+.manage-event > :first-child {
+  color: var(--muted);
+  font-size: .76rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.manage-job time {
+  padding-top: .19em;
+}
+
+.manage-outcome {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-top: 15px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-muted);
+  padding: 11px 12px;
+}
+
+.manage-outcome p {
+  color: var(--muted);
+  font-size: .83rem;
+  margin: 3px 0 0;
+}
+
+.manage-description,
+.manage-settings-note p {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.manage-description {
+  margin: 15px 0;
+}
+
+.manage-job-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 15px;
+}
+
+.manage-job-meta dt {
+  font-size: .75rem;
+  color: var(--muted);
+}
+
+.manage-job-meta dd {
+  margin: 4px 0 0;
+  font-size: .85rem;
+  line-height: 1.3;
+}
+
+.manage-job-detail h3 {
+  border-top: 1px solid var(--line);
+  margin: 0;
+  padding: 14px 0 11px;
+  font-size: .95rem;
+}
+
+#manage-jobs-title,
+#manage-job-title {
+  scroll-margin-top: 68px;
+}
+
+.manage-job-list-link {
+  display: none;
+}
+
+.manage-resources {
+  margin-bottom: 15px;
+}
+
+.manage-resources dd {
+  overflow-wrap: anywhere;
+}
+
+.manage-resources dd .text-button {
+  min-height: 30px;
+  text-align: start;
+}
+
+.manage-resources dd small {
+  display: block;
+  color: var(--muted);
+}
+
+.manage-decision {
+  margin: 14px 0;
+  padding: 0 14px 14px;
+  border: 1px solid var(--line);
+  background: var(--panel-muted);
+  border-radius: 9px;
+}
+
+.manage-decision h3 { border-top: 0; }
+.manage-decision dd { overflow-wrap: anywhere; }
+.manage-decision p { color: var(--muted); font-size: .8rem; margin: 0 0 10px; }
+
+.manage-timeline,
+.manage-inheritance {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.manage-event {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  line-height: 1.3;
+}
+
+.manage-event > :first-child {
+  padding-top: .18em;
+}
+
+.manage-event > div {
+  position: relative;
+  padding: 0 0 12px 13px;
+  border-left: 1px solid var(--line);
+}
+
+.manage-event:last-child > div {
+  border-color: transparent;
+  padding-bottom: 4px;
+}
+
+.manage-event > div::before,
+.manage-inheritance li::before {
+  content: "";
+  position: absolute;
+  top: .35rem;
+  left: -4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--panel);
+}
+
+.manage-event-pending > div::before {
+  background: var(--warn);
+}
+
+.manage-event-selected {
+  border-radius: 5px;
+  background: var(--accent-soft);
+}
+
+.manage-event strong {
+  font-size: .88rem;
+}
+
+.manage-event p {
+  color: var(--muted);
+  font-size: .8rem;
+  margin: 3px 0 0;
+  line-height: 1.45;
+}
+
+.manage-job-detail > .button,
+.manage-scope-detail > .button {
+  margin-top: 14px;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: minmax(170px, 208px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.settings-content { min-width: 0; }
+.settings-rail { display: grid; gap: 12px; padding: 10px; }
+.settings-rail [hidden] { display: none; }
+.settings-rail input {
+  min-width: 0;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-muted);
+  color: var(--text);
+}
+.settings-group h2 {
+  margin: 0 6px 3px;
+  font-size: .73rem;
+  color: var(--muted);
+}
+.settings-empty { color: var(--muted); font-size: .83rem; }
+.settings-colors { margin-top: 12px; }
+
+.manage-tab[aria-current="page"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.manage-tab {
+  width: 100%;
+  padding: 7px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: .85rem;
+  font-weight: 650;
+  text-align: start;
+}
+.manage-tab:hover { background: var(--panel-muted); }
+
+.manage-table-wrap {
+  overflow-x: auto;
+  margin-top: 13px;
+}
+
+.manage-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: .86rem;
+  line-height: 1.45;
+}
+
+.manage-table th,
+.manage-table td {
+  padding: 9px 10px 9px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.manage-table thead th {
+  color: var(--muted);
+  font-size: .74rem;
+  font-weight: 600;
+}
+
+.manage-table tbody th {
+  font-weight: 650;
+}
+
+.manage-table th:last-child,
+.manage-table td:last-child {
+  padding-right: 0;
+}
+
+.manage-settings-note {
+  margin-top: 17px;
+  padding: 11px 12px;
+  background: var(--panel-muted);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: .84rem;
+}
+
+.manage-settings-note p {
+  margin: 3px 0 0;
+}
+
+.manage-settings-note p:only-child {
+  margin-top: 0;
+}
+
+.manage-inheritance {
+  margin: 18px 0 0 5px;
+}
+
+.manage-inheritance li {
+  display: grid;
+  gap: 3px;
+  position: relative;
+  padding: 0 0 14px 14px;
+  border-left: 1px solid var(--line);
+}
+
+.manage-inheritance li:last-child {
+  border-color: transparent;
+  padding-bottom: 0;
+}
+
+.manage-inheritance strong {
+  font-size: .87rem;
+}
+
+.manage-inheritance small {
+  font-size: .8rem;
+}
+
+@media (max-width: 900px) {
+  .manage-layout,
+  .manage-settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .manage-job-list-link { display: inline-flex; min-height: 40px; flex: none; }
+  .manage-resources dd .text-button { min-height: 40px; }
+}
+
+@media (max-width: 670px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-rail { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .settings-rail input, .settings-empty { grid-column: 1 / -1; }
+  .settings-rail input { font-size: 16px; }
+  .manage-tab { min-height: 40px; overflow-wrap: anywhere; }
+}
+
+@media (max-width: 440px) {
+  .manage-job {
+    gap: 8px;
+    padding-inline: 8px;
+  }
+
+  .manage-event {
+    grid-template-columns: 60px minmax(0, 1fr);
+  }
+}
+.manage-form {
+  display: grid;
+  gap: 7px;
+  padding: 5px 18px 18px;
+}
+
+.manage-form label {
+  margin-top: 7px;
+  font-size: .8rem;
+  font-weight: 650;
+}
+
+.manage-form input,
+.manage-form select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-muted);
+  color: var(--text);
+  font-size: .85rem;
+}
+
+.manage-form button { justify-self: start; margin-top: 6px; }
+.manage-form p { color: var(--muted); font-size: .76rem; line-height: 1.5; }
+.zorec-preview-example {
+  --zorec-mascot-size: 64px;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.zorec-settings,
+.zorec-shell-settings {
+  display: grid;
+  gap: 16px;
+}
+
+.zorec-settings > .panel {
+  padding: clamp(15px, 2vw, 22px);
+}
+
+.zorec-settings > .panel .manage-form {
+  max-width: 32rem;
+  padding: 5px 0 0;
+}
+
+.zorec-shell-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  align-items: start;
+  gap: 12px;
+}
+
+.zorec-shell-card {
+  min-width: 0;
+  padding: 14px;
+}
+
+.zorec-shell-card h3 {
+  margin: 0;
+}
+
+.zorec-shell-card label {
+  margin-top: 2px;
+}
+
+.zorec-shell-option {
+  display: grid;
+  justify-items: start;
+  gap: 3px;
+  padding: 5px 0;
+}
+
+.zorec-shell-option label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.zorec-shell-option input {
+  width: auto;
+  margin: 0;
+}
+
+.zorec-shell-warning,
+.zorec-shell-card .zorec-scope-warning {
+  color: var(--warn);
+}
+
+.zorec-shell-warning {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--warn-soft);
+  font-size: .72rem;
+}
+
+.zorec-shell-card .zorec-report-effective {
+  font-weight: 650;
+}
+
+.zorec-shell-card [data-shell-result]:empty {
+  display: none;
+}
+
+.manage-tone-active { color: var(--warn); }
+.manage-job-icon.manage-tone-active,
+.manage-outcome-active .manage-outcome-icon { color: var(--warn); background: var(--warn-soft); }
+

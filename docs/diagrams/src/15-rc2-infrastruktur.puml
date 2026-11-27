@@ -1,0 +1,50 @@
+@startuml
+title OpsTend · Infrastruktur eines Beispielstandorts
+top to bottom direction
+skinparam shadowing false
+
+actor "Externer Nutzer" as user
+
+node "Externer Linux-vServer" as external {
+  component "HTTPS-Proxy\nFreigegebene Website" as proxy
+  component "Zugangsportal\nSeparates Login · SSH / Desktop" as portal
+  component "VPN-Host" as hub
+}
+
+node "Standort Werkstatt" as site {
+  node "UniFi Cloud Gateway\nFirewall · VLAN 20 → 30 nur NFS" as gateway
+  node "UniFi-Switch\nVLAN 20 Dienste · VLAN 30 Storage" as switch
+
+  node "Proxmox VE · NUC A" as pve {
+    component "QEMU-VM Medien\n4 vCPU · 8 GiB RAM · 80 GiB\nGPU mit HDMI · USB · VLAN 20" as vm
+    component "LXC Fotos\n2 vCPU · 2 GiB RAM\nVLAN 20 · HTTPS" as photos
+  }
+
+  node "Ubuntu · Host B" as linux {
+    component "Interner VPN-Peer\nZielgebundene Netzfreigabe" as peer
+    component "Podman Sensorik\n2 CPU · 2 GiB RAM · VLAN 20" as container
+  }
+
+  database "NAS\nVLAN 30 · NFS" as nas
+}
+
+user --> proxy : HTTPS
+user --> portal : HTTPS / MFA
+proxy ..> hub : veröffentlichte Route
+portal ..> hub : autorisierte Sitzung
+hub ..> peer : WireGuard-Tunnel
+peer ..> photos : HTTPS · freigegeben
+
+gateway -- switch : P1 · 10 Gbit/s
+switch -- pve : P2 · 10 Gbit/s
+switch -- linux : P3 · 2,5 Gbit/s
+switch -- nas : P4 · 2,5 Gbit/s
+vm ..> nas : NFS · Erreichbarkeit geprüft
+
+legend bottom
+  Beispielwerte und geplante Rollen.
+  Rahmen zeigen Standort und Hostzuordnung.
+  Linien ohne Pfeil zeigen Switchports und Linkraten.
+  Pfeile zeigen Zugänge, Freigaben oder Prüfungen.
+end legend
+@enduml

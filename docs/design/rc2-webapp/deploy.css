@@ -1,0 +1,217 @@
+.zorec-launcher {
+  position: fixed;
+  right: 22px;
+  bottom: 20px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 13px 5px 8px;
+  border: 1px solid var(--zorec-dock-border, var(--accent));
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--zorec-dock-bg, var(--panel));
+  box-shadow: 0 4px 16px #10262c2b;
+  font-size: .86rem;
+  font-weight: 700;
+}
+.zorec-launcher:hover { box-shadow: 0 4px 16px #10262c47; }
+.zorec-launcher[data-mood="quiet"]:hover { background: var(--accent-soft); }
+.zorec-launcher[data-mood]:not([data-mood="quiet"]) {
+  --zorec-dock-border: var(--zorec-tile-line);
+  --zorec-dock-bg: var(--zorec-tile);
+}
+.zorec-launcher { --zorec-mascot-size: 38px; }
+.zorec-launcher-copy { display: grid; gap: 1px; text-align: start; }
+.zorec-launcher-copy small { color: var(--muted); font-weight: 550; }
+.deploy-heading { --zorec-mascot-size: 44px; }
+.deploy-dialog {
+  position: fixed;
+  inset: auto 22px 20px auto;
+  width: min(590px, calc(100vw - 44px));
+  max-height: min(86dvh, 820px);
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  color: var(--text);
+  background: var(--panel);
+  box-shadow: 0 12px 36px #10262c45;
+  overflow: hidden;
+}
+.deploy-dialog[open] { display: flex; flex-direction: column; }
+.deploy-dialog.chat-open { height: min(640px, 86dvh); }
+.deploy-dialog[data-shell="admin-edit"] {
+  --accent: #633d96;
+  --accent-soft: #eee4fc;
+  --line: #d6c3ed;
+  --panel-muted: #f8f3fe;
+  --zorec-edit-primary: #633d96;
+  border-color: var(--accent);
+}
+:root[data-theme="dark"] .deploy-dialog[data-shell="admin-edit"] {
+  --accent: #d6bbff;
+  --accent-soft: #392a51;
+  --line: #695383;
+  --panel-muted: #282137;
+  --zorec-edit-primary: #684596;
+}
+.deploy-dialog[data-shell="admin-edit"] .deploy-heading,
+.deploy-dialog[data-shell="admin-edit"] .zorec-shell-bar { background: var(--accent-soft); }
+.deploy-dialog[data-shell="admin-edit"] .button.primary {
+  border-color: var(--zorec-edit-primary);
+  background: var(--zorec-edit-primary);
+}
+.deploy-dialog[data-shell="admin-edit"] .button.primary:hover {
+  background: color-mix(in srgb, var(--zorec-edit-primary) 85%, black);
+}
+.deploy-dialog::backdrop { background: #121f2550; }
+.deploy-heading {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.deploy-heading-actions { display: flex; align-items: center; gap: 6px; }
+.zorec-chat-menu > summary {
+  padding: 8px 4px;
+  font-size: .81rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.zorec-chat-menu[open] > summary { color: var(--text); }
+.zorec-chat-menu-panel {
+  position: absolute;
+  z-index: 3;
+  inset-block-start: calc(100% - 3px);
+  inset-inline-end: 12px;
+  width: min(16rem, calc(100% - 24px));
+  max-height: min(18rem, 44dvh);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  box-shadow: 0 6px 18px #10262c32;
+}
+.zorec-chat-menu-panel ul {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding: 4px 0 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+.zorec-chat-menu-panel button {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  overflow-wrap: anywhere;
+}
+.zorec-chat-menu-panel button:hover { background: var(--accent-soft); }
+.deploy-heading h2, .deploy-heading p { overflow-wrap: anywhere; }
+.deploy-body, .zorec-transcript { min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
+.zorec-chat { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.zorec-shell-bar { padding: 8px 16px; border-bottom: 1px solid var(--line); }
+.zorec-shell-controls { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 10px; align-items: center; }
+.zorec-shell-controls .tabs button:disabled { opacity: .6; cursor: default; }
+.zorec-shell-summary { margin: 4px 0 0; color: var(--muted); font-size: .76rem; }
+.zorec-shell-warning { color: var(--warn); font-weight: 650; }
+.zorec-transcript { flex: 1; padding: 16px; scrollbar-gutter: stable; }
+.zorec-exchange { display: grid; gap: 8px; margin-bottom: 16px; }
+.chat-scope { display: block; margin-bottom: 2px; font-size: .7rem; color: var(--muted); }
+.chat-user, .chat-answer { width: fit-content; max-width: min(95%, 47ch); padding: 9px 12px; border-radius: 8px; font-size: .88rem; line-height: 1.45; overflow-wrap: anywhere; }
+.chat-user { justify-self: end; background: var(--accent-soft); }
+.chat-answer { background: var(--panel-muted); border: 1px solid var(--line); }
+.chat-answer p { white-space: pre-line; }
+.chat-author { display: block; margin-bottom: 4px; color: var(--text); font-size: .79rem; }
+.chat-answer .chat-actions { margin-top: 8px; }
+.chat-answer .zorec-turn-tools { display: flex; flex-wrap: wrap; gap: 5px 12px; margin-top: 6px; }
+.chat-answer .zorec-turn-tools .text-button { min-height: 32px; }
+.deploy-heading-actions :is([data-activity-toggle], [data-diagram-toggle])[aria-expanded="true"] { color: var(--accent); background: var(--accent-soft); }
+.chat-intro { color: var(--muted); }
+.chat-compose { display: grid; gap: 10px; padding: 12px 16px 15px; border-top: 1px solid var(--line); }
+.chat-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.chat-actions .button { min-height: 32px; padding: 5px 8px; }
+.chat-context-actions { align-items: center; }
+.chat-context-actions > span { margin-inline-end: 3px; font-size: .75rem; color: var(--muted); }
+.chat-context-actions .button { background: var(--panel-muted); }
+.chat-context-actions .button:hover { background: var(--accent-soft); }
+.chat-question-mode { position: relative; flex: none; }
+.chat-question-mode > summary {
+  width: 36px;
+  min-height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.chat-question-mode[open] > summary,
+.chat-question-mode > summary[data-selected="true"],
+.chat-question-mode button[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+.chat-question-mode .zorec-chat-menu-panel {
+  inset-block: auto calc(100% + 6px);
+  inset-inline: 0 auto;
+  width: min(14rem, calc(100vw - 44px));
+}
+.chat-question-mode-label { padding: 4px 8px; color: var(--muted); font-size: .76rem; }
+.chat-sources { margin: 8px 0 0; padding-inline-start: 1.45em; color: var(--accent); font-size: .8rem; overflow-wrap: anywhere; }
+.chat-answer .chat-source-status { margin-top: 6px; color: var(--muted); font-size: .78rem; }
+.chat-compose .deploy-add { flex-wrap: nowrap; }
+.chat-compose label, .chat-compose input { min-width: 0; }
+.deploy-heading p, .deploy-question p { margin-top: 4px; color: var(--muted); font-size: .83rem; line-height: 1.5; }
+.deploy-form, .deploy-ide, .deploy-repos { display: grid; gap: 11px; }
+.deploy-form { padding: 15px 17px 18px; }
+.deploy-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.deploy-field { display: grid; gap: 5px; color: var(--muted); font-size: .8rem; }
+.deploy-field :is(input, select), .deploy-ide textarea {
+  width: 100%;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--panel-muted);
+}
+.deploy-actions, .deploy-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+.deploy-add label { flex: 1 1 210px; }
+.deploy-repo, .deploy-question, .deploy-ide, .deploy-code {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-muted);
+}
+.deploy-repo, .deploy-check { display: flex; align-items: start; gap: 8px; font-size: .83rem; }
+.deploy-repo small { display: block; margin-top: 4px; color: var(--muted); overflow-wrap: anywhere; }
+.deploy-file { display: inline-block; margin-top: 6px; }
+.deploy-code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.deploy-error { margin: 12px 17px 0; padding: 8px; color: var(--danger); background: var(--danger-soft); border-radius: 7px; }
+@media (max-width: 520px) {
+  .deploy-dialog { inset: auto 8px max(8px, env(safe-area-inset-bottom)) auto; width: calc(100vw - 16px); max-width: none; }
+  .deploy-heading { gap: 8px; padding: 10px 12px; }
+  .deploy-heading-actions .button, .chat-answer .zorec-turn-tools .text-button { min-height: 44px; }
+  .deploy-heading-actions [data-dialog-action="close"] { min-width: 44px; padding-inline: 8px; }
+  .deploy-form, .zorec-transcript, .chat-compose, .zorec-shell-bar { padding-inline: 12px; }
+  .zorec-chat-menu > summary { line-height: 28px; }
+  .zorec-chat-menu-panel button { min-height: 44px; }
+  .chat-question-mode > summary { width: 44px; min-height: 44px; }
+  .chat-actions .button { min-height: 38px; }
+  .deploy-field :is(input, select), .deploy-ide textarea { font-size: max(16px, 1rem); }
+  .deploy-fields { grid-template-columns: minmax(0, 1fr); }
+  .zorec-launcher { right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); padding: 6px; }
+  .zorec-launcher-copy { padding-inline-end: 4px; }
+  .zorec-launcher-copy strong { display: none; }
+  .page { padding-bottom: 68px; }
+}
+@media (max-width: 360px) {
+  .deploy-heading { --zorec-mascot-size: 36px; gap: 7px; padding-inline: 10px; }
+  .deploy-heading h2 { font-size: .95rem; }
+  .deploy-heading:has([data-diagram-toggle]) { display: grid; grid-template-columns: auto minmax(0, 1fr); }
+  .deploy-heading:has([data-diagram-toggle]) .deploy-heading-actions { grid-column: 1 / -1; justify-content: end; }
+}

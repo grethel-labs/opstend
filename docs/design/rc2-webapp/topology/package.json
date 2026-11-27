@@ -1,0 +1,11 @@
+{
+  "name": "opstend-rc2-topology-demo",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@grethel-labs/excaliplant": "1.14.2",
+    "esbuild": "0.28.2"
+  }
+}

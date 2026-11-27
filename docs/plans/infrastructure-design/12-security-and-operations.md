@@ -1,7 +1,7 @@
 # 12 · Vertrauensgrenzen, Audit und Betriebsstörungen
 
-Vertieft die Sicherheitsverträge von PX01–PX03, FL01–FL03, BK09,
-IN01–IN03 und CP01–CP03. Stand der Recherche 2026-11-24.
+Vertieft die Sicherheitsverträge von PX01–PX04, FL01–FL03, BK09,
+UI01, IN01–IN03, NX01–NX04 und CP01–CP03.
 Das lokale [Executor-Modell aus ADR 0001](../../adr/0001-architecture.md)
 bleibt die erste Grenze. Die Flotte fügt gegenseitig authentisierte
 Netzpfade und nachweisbare Zuständigkeiten hinzu.
@@ -14,6 +14,9 @@ Netzpfade und nachweisbare Zuständigkeiten hinzu.
 | Flotten-Koordinator | Policies und Jobs planen sowie Claims beantragen | Aktuelle Autorität, revisionsgebundener Zustand, Budget, Idempotenz und Freigabe |
 | Host-/Quellbeobachter | Nur zugeordnetes Inventar, Messungen und Quittungen veröffentlichen | Individueller Source-Scope, Zeit, Reihenfolge, Schema und Payload-Limits |
 | Ziel-Executor | Registrierte Actions mit eng gescopten Credentials oder lokaler Hostidentität | Lokale Sicherheitsgrenze, aktuelles Rollenrecht, Kill Switch, Vorbedingungen, Sperre und resultierende Wirkung |
+| UniFi-, DNS- oder CA-Adapter | Freigegebene Rolle, Geräte-, Zonen- oder Ausstellungsbereich | Aktueller nativer Stand, gebundene Freigabe, enges Zielrecht, Quittung und Readback |
+| VPN-Teilnehmer und HTTPS-Proxy | Bestätigte Netzzuordnung und registrierte Zielroute | Teilnehmeridentität, Gültigkeit, Widerruf und beobachteter Dienstpfad |
+| Externes Zugangsportal | Eigene Sitzung für autorisierte Website, SSH oder Gast-Desktop | Login/MFA, Zielrecht, Sitzungsablauf und Widerruf. Der private Adminzugang hat eigene Rechte. |
 | Backup-Schreiber, -prüfer und Retention | Jeweils konkreter Repository-/Namespace-Scope und verschiedene Rechte | Datensichere Zuordnung, Schlüssel-ID, Prune-Verantwortung und unabhängiger Prüfnachweis |
 | Quorum-Mitglied | Repliziert autoritativen KV-Zustand. Dienste erhalten nur Rollen und benötigte Präfixe. | Private mTLS-Kommunikation, getrennte Admin-Credentials, Snapshot- und Restore-Autorität |
 
@@ -23,7 +26,7 @@ Rollenentscheidung, Transportvertrauen und Bindung an eine konkrete
 native Ressource werden separat geprüft. Externe Linux-Hosts
 bekommen dieselben fachlichen Rollen im Rahmen ihres Zielprofils.
 [NIST Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final) ·
-[OpsTend Executor-Erweiterung](../../extending.md)
+[Steward Executor-Erweiterung](../../extending.md)
 
 ## TLS- und Credential-Optionen
 
@@ -33,7 +36,7 @@ bekommen dieselben fachlichen Rollen im Rahmen ihres Zielprofils.
 | Fingerprint bestätigter PVE-Gegenstelle | Selbstsigniertes Zertifikat und kleiner administrativer Scope | Bei Erneuerung separat bestätigen. Geplantes Überlappungsfenster nur mit vorab bestätigtem Material. |
 | Gegenseitig authentisierte Agentenverbindung | Registrierte Ziele und private Site-Transportwege | Identität pro Agent, Zertifikatszweck, Ablauf, Rotation und Widerrufsbeobachtung. Die autoritative ACL bleibt zusätzlich wirksam. |
 | Individuelles kurzlebiges PVE-/PBS-Token nach Aufgabe | Zugriff auf native Backends mit minimaler Wirkung | Jeder Token-Wert bleibt beim zuständigen Worker. Credentials für Prüfung und Aufbewahrung haben eigene Lebensdauern und Rechte. |
-| Spätere externe Identität über OIDC und Zertifikatsbindung | Größere Administration oder getrennte Trust Domains | Menschliche Sitzung und Agentencredential haben eigene Freigabe- und Widerrufsmodelle. Ein höherer Standardumfang braucht eigene Abnahme. |
+| OIDC für das Zugangsportal und private Recovery-Identität | NX01–NX03, menschlicher Zugriff auf freigegebene Dienste und Wiederanlauf | Portal-Login, OpsTend-Administration und Agentenaufnahme haben eigene Sitzungs- und Widerrufsmodelle. Öffentliche Admin-Sitzungen bleiben an die S03-Abnahme gebunden. |
 
 [TLS 1.3](https://www.rfc-editor.org/rfc/rfc8446.html) ·
 [PKIX-Zertifikatprofil](https://www.rfc-editor.org/rfc/rfc5280.html) ·
@@ -69,7 +72,7 @@ nicht freigegebene Serialnummern, private Netzwerk- oder
 Credential-Werte gehen nicht in Reports, Browserbundles,
 Backup-Metadaten oder Telemetrie. Aufbewahrung folgt dem
 Datentyp. Ein Audit-Export braucht gesonderte Scope- und
-Redaktionsregeln. [OpsTend Architektur](../../architecture.md)
+Redaktionsregeln. [Steward Architektur](../../architecture.md)
 
 ## Störfälle und kontrollierte Wiederaufnahme
 
@@ -81,6 +84,8 @@ Redaktionsregeln. [OpsTend Architektur](../../architecture.md)
 | Backup-Repository kompromittiert oder Zugang nicht mehr verfügbar | Snapshot-Sicht und unabhängige Copy-/Restore-Belege getrennt halten. Recovery nutzt einen tatsächlich qualifizierten alternativen Datenpfad. | BK09–BK11 |
 | Externe manuelle PVE-Aktion oder ein nativer Zeitplan | Native Wirkung und Actor soweit verfügbar importieren. Schreibende Steward-Operationen prüfen ihre aktuellen Voraussetzungen erneut. | PX03, FL03, PH02 |
 | Maßnahme während Wartung oder Notfall | Bestehende gesondert freigegebene Operatorregeln anwenden. Das System zeigt Auslöser, Wirkung und erforderlichen nächsten Abgleich. | FL03, PH02, IR01 |
+| DNS, CA, Uhr, Identität oder Tunnel ausgefallen | Nur betroffene Ausführungen und externe Pfade pausieren. Der private Bootstrap-Zugang kann den Zustand prüfen und betroffene Rollen wieder aufnehmen. | NX01–NX03, IR01 |
+| Ungewisser Vollzug einer UniFi-Änderung | Ausgangsrevision und Rückweg beibehalten, Wirkung am nativen Ziel und auf dem Verwaltungsweg prüfen, anschließend freigeben oder rücknehmen. | NX04 |
 
 **Vertrauensgrenze.** Ein vollständiger Root-Kompromiss einer
 Zielmaschine kann ihren Credential- und Beobachtungspfad betreffen.

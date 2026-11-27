@@ -5,15 +5,27 @@ the remaining roadmap. [implementation-plan.md](implementation-plan.md) still
 defines each card's scope; this file defines **order, budget, stopping rules and
 what "done" means**, so work cannot circle on one card again.
 
+## Why the previous run stalled
+
+- 213 commits in six days, but the last ~25 all concern one sub-problem of
+  L02 step 2: guarded deployment transport, route fences and custody of Shared
+  pods (including a patched Podman build). Cards L03–L11, A01–A06, R01–R05 and
+  S01–S03 are untouched.
+- Every discovered hazard became a new design step, ADR section and VM
+  acceptance run instead of a backlog entry.
+- Acceptance was demanded per micro-change, with up to three review rounds
+  each, so one card step consumed days. `STATUS.md` grew to ~3,600 lines and
+  became unusable as context.
+- Time-gated work (B08 retention) was not used as a parallel lane.
+
 ## The goal
 
-Deliver the staged roadmap through a **first release candidate (RC1)** in the
-milestones below, in order, within the budgets below. RC1 is: deterministic
-self-management with verified updates, quarantine of critical exposure,
-archiving, maintenance windows and backups, accepted on an authorized test
-stack; optional AI and repository deployment layered on the same executor path;
-and a signed release.
-Anything not listed under a milestone is out of scope until RC1.
+Deliver a **first release candidate (RC1)** for private single-host operation.
+The [release subset](../release/accepted-subset.yml) defines the supported
+installation, configuration recovery, scanner, maintenance, health and
+administration paths. The exact signed archive needs the S01 acceptance.
+The milestones below retain the wider work queue. [STATUS.md](STATUS.md#rc1-scope-decisions)
+records the evidence and explicit deferrals for paths outside the release subset.
 
 ## Rules that prevent circling
 
@@ -42,8 +54,12 @@ Anything not listed under a milestone is out of scope until RC1.
    milestone. If a feature needs one, the feature is deferred (see X1).
 7. **`STATUS.md` stays short:** a table row per card plus at most 15 lines per
    completed step. Details belong in private receipts under `.steward/`.
-8. **Parallel lanes:** a time-gated or host-gated gate never blocks code work.
-   Record the exact condition and date, then continue the next milestone.
+8. **Parallel lanes:** a time-, host- or provider-gated check never blocks
+   independent work. Record the proven scope, last check date and the missing
+   prerequisite in `STATUS.md`. Mark the wider profile partially tested or
+   deferred and continue. Resume the open check when the prerequisite becomes
+   available or a concrete fix addresses the recorded failure, and the
+   profile is in scope for a planned release. Reuse the applicable evidence.
 9. **Safety invariants do not loosen.** The rules in the work queue (no
    production mutation outside the executor, no shell strings, secrets by
    reference, fail closed, no claims from fakes) apply unchanged. This file
@@ -58,24 +74,28 @@ The [post-RC1 plan](post-rc1.md) defines the subsequent milestones M9–M15.
 
 | # | Cards | Exit criteria (all) | State |
 |---|---|---|---|
-| M0 | Reset | `STATUS.md` compact, historical evidence retained by operators, Shared deferred in ADR 0006, this plan and `backlog.md` committed | done 2026-11-21 |
-| M1 | L03 | Weekly window model with DST/clock tests; deterministic admission with durable started/completed/failed state; TCP and registered container health probes with response-time thresholds; controller self-healing unchanged; fake-clock tests; one VM check of probe timeout/health | **done 2026-11-21** (G8 healthy-container variant deferred for RC1 after two custody failures before deployment) |
-| M2 | B08, V01–V03 | Retention gates on the dedicated fixture clock (≥ 2026-11-23 `protected`, ≥ 2026-11-25 `retire`); offline recovery independent of the test node and its storage; V01 negative cases; V03 OSV/cold-DB; V02 only where a destination is authorized — otherwise recorded as blocked. `backup.enabled` guard removed only if B08 passes in full | retention and independent recovery passed; installed backup gates open |
-| M3 | L04–L06 | Verified update artifact and bound approval; `apply_verified_image` through the executor; failed update recovers with data readback; patch profile accepted on a VM | **host gates passed 2026-11-22**; guards `projects.update`/`automation.patch` stay until B08 passes |
+| M0 | Reset | `STATUS.md` compact, archive frozen, Shared deferred in ADR 0006, this plan and `backlog.md` committed | done 2026-11-21 |
+| M1 | L03 | Weekly window model with DST/clock tests; deterministic admission with durable started/completed/failed state; TCP and registered container health probes with response-time thresholds; controller self-healing unchanged; fake-clock tests; one VM check of probe timeout/health | **done 2026-11-21** (VM103; G8 healthy-container variant deferred for RC1 after two custody failures before deployment) |
+| M2 | B08, V01–V03 | Retention and independent single-host recovery evidence, V01 negative cases and bounded V03 OSV/cold-DB. V02 requires an authorized destination for external delivery. Scheduled backup activation requires full B08 evidence. | retention, independent recovery, V01 and bounded V03 proven; wider activation and delivery deferred from RC1 |
+| M3 | L04–L06 | Verified update artifact and bound approval; `apply_verified_image` through the executor; failed update recovers with data readback; patch profile accepted on a VM | **host gates passed 2026-11-22 on VM104**; guards `projects.update`/`automation.patch` stay until B08 passes |
 | M4 | L07–L08 | Deterministic critical-risk decision; exposure removal with real IPv4/IPv6/proxy data-path check; quarantine requires successful backup; verified reactivation; interruption test at each transition | open |
 | M5 | L09–L11 | Retire/archive/reactivate without deletion shortcut; version-bound UI apply; announced drill with window | open |
 | M6 | A01–A06 | Inference contract with reserved budgets; local Ollama accepted; one external provider; login flow; weekly model selection; advisory answers with sources. Everything optional and off by default; no deterministic feature may depend on it | open |
 | M7 | R01–R05 | Repository fetch, workload proposal, isolated build, validator, deployment by digest; repair profile produces a pull request only | open |
-| M8 | S01–S03 | Signed release with SBOM/provenance for the accepted subset; numeric-IP HTTPS from a private LAN is the new deployment default and requires host acceptance; further OS/arch profiles and public admin only if their gates are met | open |
+| M8 | S01–S03 | Signed release with SBOM/provenance for the accepted subset, including private numeric-IP IPv4 administration. Further OS/arch profiles and public admin have separate gates. | private routed IPv4 proven on the earlier VM104 candidate; operator signature and exact-archive acceptance open |
 | RC1 | all above | M1–M8 exit criteria met or explicitly deferred in `STATUS.md` with reason | — |
 | X1 | optional | Shared-group mutation custody (ADR 0006 custody sections, `tests/integration/podman_custody/`). Starts only after RC1 | deferred |
 
 L02 is accepted for `isolation: separate` (see [STATUS.md](STATUS.md)). Shared
 group mutation stays rejected until X1.
 
-For RC1, an encrypted Restic copy kept independently of the test node and a
-successful offline restore in a fresh VM provide B08 evidence for loss of that
-node and its storage. Recovery from a site-wide outage remains outside the tested scope.
+For RC1, the operator accepts the encrypted Restic copy on the separate PC and
+the offline restore in a fresh VM there as B08 evidence for loss of `cn-0001`
+and its storage. Retention and this recovery scope are closed for RC1.
+The managed backup activation profile is partially tested and stays deferred
+from RC1. Resume its open checks when the authorized target and empty restore
+VM are ready for a planned activation batch. Site-wide recovery has its own
+evidence scope.
 
 ## Parallel lanes and VM roles (2026-11-21)
 
@@ -84,9 +104,10 @@ Implementation and host acceptance are separate activities with separate owners.
 | Role | Does | Never does |
 |---|---|---|
 | **Implementation lane** (one git worktree + branch per card group) | Code, unit/contract tests, focused local checks, one commit per card step on its lane branch | Touch any VM, run the full suite locally, edit another lane's files beyond a merge-trivial hunk, push |
-| **Isolated CI runner** | Runs the full suite, ruff and ansible-lint for a given worktree/commit in parallel (`pytest -n`) | Hold secrets, deploy OpsTend |
-| **Acceptance VMs** | Run a milestone's gate script against a committed, merged commit; reset between runs | Run unmerged lane code |
-| **Retention fixture** | Long-lived guest reserved for B08 retention gates | Be used for per-feature experiments |
+| **CI runner VM** (VM102 on `cn-0001`) | Runs the full suite, ruff and ansible-lint for a given worktree/commit in parallel (`pytest -n`), so the 2-core workstation is not the bottleneck | Hold secrets, deploy Steward |
+| **Acceptance VMs** (VM103, VM104; 2 vCPU / 4 GiB each) | Run a milestone's gate script against a committed, merged commit; reset between runs | Run unmerged lane code |
+| **VM101** | Long-lived B08/retention fixture; leave untouched except for B08 gates | Be used for per-feature experiments |
+| **VM100** | Not ours to change | Anything |
 | **Parent** | Merges lane branches in dependency order, regenerates the schema after config merges, runs the full suite on the runner, commits, hands the merged commit to the acceptance lane, updates `STATUS.md` | Implement features itself while lanes run |
 
 Lane rules: disjoint write scopes per lane; lanes only start code for cards whose
@@ -94,7 +115,8 @@ Lane rules: disjoint write scopes per lane; lanes only start code for cards whos
 card's acceptance, not its code); a lane stops at its card's last step or at its
 first real blocker and reports; conflicts in `schemas/config.v1.schema.json` are
 resolved by regenerating it (`python -m steward.core.schema`), never by hand.
-Use authorized temporary guests within the operator’s capacity limits.
+Allowed target-VM budget on `cn-0001`: VMIDs 102-104 only, memory total ≤ 16 GiB
+for new VMs, so VM100/VM101 and the node stay healthy.
 
 ## How to run a milestone
 

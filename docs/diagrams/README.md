@@ -1,6 +1,7 @@
 # Steward-Diagramme
 
-Die Diagramme zeigen Abläufe auf einem verwalteten Linux-Host. Die
+Die Diagramme zeigen Abläufe auf einem verwalteten Linux-Host und das
+Zielbild für die Flottentopologie. Die
 [Architektur](../architecture.md) beschreibt die Schnittstellen.
 [STATUS](../STATUS.md#card-state) belegt den Stand der Funktionsfreigaben und
 Host-Abnahmen. Ein Diagramm eines Kandidaten beschreibt den vorgesehenen oder
@@ -23,6 +24,7 @@ bereits implementierten Pfad mit den dort dokumentierten Freigabegrenzen.
 | Backups (Kandidat) | [Capture, Upload, Prüfung und Restore](out/svg/12-backup-nachweise.svg) | [Datei](out/excalidraw/12-backup-nachweise.excalidraw) |
 | KI-Beratung (Kandidat) | [Scopes, Peer-UID und Budget](out/svg/13-inferenz-und-advice.svg) | [Datei](out/excalidraw/13-inferenz-und-advice.excalidraw) |
 | Entwicklung | [Skills, CI und Abnahme](out/svg/14-arbeitsweise-und-ci.svg) | [Datei](out/excalidraw/14-arbeitsweise-und-ci.excalidraw) |
+| RC2-Topologie (Zielbild) | [Standort, Hosts, Netze und externer Zugang](out/svg/15-rc2-infrastruktur.svg) | [Datei](out/excalidraw/15-rc2-infrastruktur.excalidraw) |
 
 ## Diagramme bearbeiten
 
@@ -36,8 +38,7 @@ docs/diagrams/render.sh src/03-deploy-und-revisionen.puml
 ```
 
 Prüfe nach einer Änderung die gerenderten Texte und Pfeile. Checke die
-aktualisierte Quelle zusammen mit den SVG- und Excalidraw-Exporten unter
-[`out/`](out/) ein. PNG-Exporte lassen sich bei Bedarf lokal erzeugen.
+aktualisierte Quelle zusammen mit ihren drei Exporten unter [`out/`](out/) ein.
 
 Die Grafik im [Projekt-README](../../README.md) entsteht aus
 [`readme/operations.puml`](readme/operations.puml). Ihre beiden SVG-Varianten

@@ -1,0 +1,402 @@
+{
+  "observed": {
+    "profile": "pve-native/v1",
+    "status": "observed",
+    "coverage": "token_scope",
+    "observed_at": "2026-11-27T13:20:50Z",
+    "evidence": {
+      "source": "cluster_resources",
+      "state": "observed",
+      "observed_at": "2026-11-27T13:20:50Z"
+    },
+    "nodes": [
+      {
+        "evidence": {
+          "source": "cluster_resources",
+          "state": "observed",
+          "observed_at": "2026-11-27T13:20:50Z"
+        },
+        "node": "nuc-a",
+        "status": "online",
+        "cpu_capacity": 16,
+        "max_memory_bytes": 51539607552,
+        "max_disk_bytes": 1099511627776,
+        "uptime_seconds": 314081
+      }
+    ],
+    "guests": [
+      {
+        "evidence": {
+          "source": "cluster_resources",
+          "state": "observed",
+          "observed_at": "2026-11-27T13:20:50Z"
+        },
+        "node": "nuc-a",
+        "vmid": 201,
+        "kind": "qemu",
+        "name": "Medien",
+        "pool": "workloads",
+        "status": "running",
+        "cpu_fraction": 0,
+        "cpu_capacity": 4,
+        "memory_bytes": 3221225472,
+        "max_memory_bytes": 8589934592,
+        "disk_bytes": 38654705664,
+        "max_disk_bytes": 68719476736,
+        "uptime_seconds": 97200,
+        "network": {
+          "evidence": {
+            "source": "guest_config",
+            "state": "observed",
+            "observed_at": "2026-11-27T13:20:50Z"
+          },
+          "items": [
+            {
+              "index": 0,
+              "bridge": "vmbr0",
+              "vlan_tag": 20
+            },
+            {
+              "index": 1,
+              "bridge": "vmbr1",
+              "vlan_tag": null
+            }
+          ]
+        },
+        "measurements": {
+          "evidence": {
+            "source": "guest_rrd",
+            "state": "observed",
+            "observed_at": "2026-11-27T13:20:50Z"
+          },
+          "items": [
+            {
+              "time": "2026-11-27T13:17:00Z",
+              "cpu_fraction": 0.12,
+              "cpu_capacity": null,
+              "memory_bytes": 3221225472,
+              "max_memory_bytes": null,
+              "host_memory_bytes": null,
+              "disk_bytes": null,
+              "max_disk_bytes": null,
+              "disk_read_bytes_per_second": null,
+              "disk_write_bytes_per_second": null,
+              "net_in_bytes_per_second": 196608,
+              "net_out_bytes_per_second": null
+            },
+            {
+              "time": "2026-11-27T13:19:00Z",
+              "cpu_fraction": null,
+              "cpu_capacity": null,
+              "memory_bytes": 3221225472,
+              "max_memory_bytes": null,
+              "host_memory_bytes": null,
+              "disk_bytes": null,
+              "max_disk_bytes": null,
+              "disk_read_bytes_per_second": null,
+              "disk_write_bytes_per_second": null,
+              "net_in_bytes_per_second": null,
+              "net_out_bytes_per_second": null
+            },
+            {
+              "time": "2026-11-27T13:20:00Z",
+              "cpu_fraction": 0,
+              "cpu_capacity": null,
+              "memory_bytes": 3221225472,
+              "max_memory_bytes": null,
+              "host_memory_bytes": null,
+              "disk_bytes": null,
+              "max_disk_bytes": null,
+              "disk_read_bytes_per_second": null,
+              "disk_write_bytes_per_second": null,
+              "net_in_bytes_per_second": 0,
+              "net_out_bytes_per_second": null
+            }
+          ]
+        },
+        "tasks": {
+          "evidence": {
+            "source": "guest_tasks",
+            "state": "observed",
+            "observed_at": "2026-11-27T13:20:50Z"
+          },
+          "items": [
+            {
+              "operation": "start",
+              "state": "succeeded",
+              "started_at": "2026-11-26T10:18:09Z",
+              "finished_at": "2026-11-26T10:18:14Z",
+              "warning_count": null
+            },
+            {
+              "operation": "migrate",
+              "state": "warning",
+              "started_at": "2026-11-26T10:12:04Z",
+              "finished_at": "2026-11-26T10:12:26Z",
+              "warning_count": 1
+            }
+          ]
+        }
+      },
+      {
+        "evidence": {
+          "source": "cluster_resources",
+          "state": "observed",
+          "observed_at": "2026-11-27T13:20:50Z"
+        },
+        "node": "nuc-a",
+        "vmid": 202,
+        "kind": "lxc",
+        "name": "Fotos",
+        "pool": "workloads",
+        "status": "running",
+        "cpu_fraction": 0.035,
+        "cpu_capacity": 2,
+        "memory_bytes": 1073741824,
+        "max_memory_bytes": 2147483648,
+        "disk_bytes": 15032385536,
+        "max_disk_bytes": 34359738368,
+        "uptime_seconds": 45000,
+        "network": {
+          "evidence": {
+            "source": "guest_config",
+            "state": "observed",
+            "observed_at": "2026-11-27T13:20:50Z"
+          },
+          "items": [
+            {
+              "index": 0,
+              "bridge": "vmbr0",
+              "vlan_tag": 20
+            }
+          ]
+        },
+        "measurements": {
+          "evidence": {
+            "source": "guest_rrd",
+            "state": "missing",
+            "observed_at": "2026-11-27T13:20:50Z"
+          },
+          "items": []
+        },
+        "tasks": {
+          "evidence": {
+            "source": "guest_tasks",
+            "state": "restricted",
+            "observed_at": "2026-11-27T13:20:50Z"
+          },
+          "items": []
+        }
+      },
+      {
+        "evidence": {
+          "source": "cluster_resources",
+          "state": "observed",
+          "observed_at": "2026-11-27T13:20:50Z"
+        },
+        "node": "nuc-a",
+        "vmid": 203,
+        "kind": "qemu",
+        "name": "Entwicklung",
+        "pool": "workloads",
+        "status": "stopped",
+        "cpu_fraction": 0,
+        "cpu_capacity": 4,
+        "memory_bytes": 0,
+        "max_memory_bytes": 6442450944,
+        "disk_bytes": 19327352832,
+        "max_disk_bytes": 68719476736,
+        "uptime_seconds": 0,
+        "network": {
+          "evidence": {
+            "source": "guest_config",
+            "state": "absent",
+            "observed_at": "2026-11-27T13:20:50Z"
+          },
+          "items": []
+        },
+        "measurements": {
+          "evidence": {
+            "source": "guest_rrd",
+            "state": "observed",
+            "observed_at": "2026-11-27T13:20:50Z"
+          },
+          "items": [
+            {
+              "time": "2026-11-27T12:36:00Z",
+              "cpu_fraction": 0.1,
+              "cpu_capacity": null,
+              "memory_bytes": 2147483648,
+              "max_memory_bytes": null,
+              "host_memory_bytes": null,
+              "disk_bytes": null,
+              "max_disk_bytes": null,
+              "disk_read_bytes_per_second": null,
+              "disk_write_bytes_per_second": null,
+              "net_in_bytes_per_second": null,
+              "net_out_bytes_per_second": null
+            },
+            {
+              "time": "2026-11-27T12:39:00Z",
+              "cpu_fraction": 0,
+              "cpu_capacity": null,
+              "memory_bytes": 0,
+              "max_memory_bytes": null,
+              "host_memory_bytes": null,
+              "disk_bytes": null,
+              "max_disk_bytes": null,
+              "disk_read_bytes_per_second": null,
+              "disk_write_bytes_per_second": null,
+              "net_in_bytes_per_second": null,
+              "net_out_bytes_per_second": null
+            }
+          ]
+        },
+        "tasks": {
+          "evidence": {
+            "source": "guest_tasks",
+            "state": "observed",
+            "observed_at": "2026-11-27T13:20:50Z"
+          },
+          "items": [
+            {
+              "operation": "shutdown",
+              "state": "succeeded",
+              "started_at": "2026-11-27T12:38:04Z",
+              "finished_at": "2026-11-27T12:38:09Z",
+              "warning_count": null
+            }
+          ]
+        }
+      }
+    ],
+    "pools": [
+      {
+        "evidence": {
+          "source": "cluster_resources",
+          "state": "observed",
+          "observed_at": "2026-11-27T13:20:50Z"
+        },
+        "pool": "workloads"
+      }
+    ],
+    "datastores": [
+      {
+        "evidence": {
+          "source": "cluster_resources",
+          "state": "observed",
+          "observed_at": "2026-11-27T13:20:50Z"
+        },
+        "node": "nuc-a",
+        "storage": "local-lvm",
+        "status": "available",
+        "plugin_type": "lvmthin",
+        "content": [
+          "images",
+          "rootdir"
+        ],
+        "shared": false,
+        "max_disk_bytes": 1099511627776
+      },
+      {
+        "evidence": {
+          "source": "cluster_resources",
+          "state": "observed",
+          "observed_at": "2026-11-27T13:20:50Z"
+        },
+        "node": "nuc-a",
+        "storage": "nas-nfs",
+        "status": "available",
+        "plugin_type": "nfs",
+        "content": [
+          "images",
+          "rootdir"
+        ],
+        "shared": true,
+        "max_disk_bytes": 4398046511104
+      }
+    ]
+  },
+  "restricted": {
+    "profile": "pve-native/v1",
+    "status": "observed",
+    "coverage": "token_scope",
+    "observed_at": "2026-11-27T13:20:50Z",
+    "evidence": {
+      "source": "cluster_resources",
+      "state": "observed",
+      "observed_at": "2026-11-27T13:20:50Z"
+    },
+    "nodes": [],
+    "guests": [
+      {
+        "evidence": {
+          "source": "cluster_resources",
+          "state": "observed",
+          "observed_at": "2026-11-27T13:20:50Z"
+        },
+        "node": "nuc-a",
+        "vmid": 202,
+        "kind": "lxc",
+        "name": "Fotos",
+        "pool": null,
+        "status": "running",
+        "cpu_fraction": 0.035,
+        "cpu_capacity": 2,
+        "memory_bytes": 1073741824,
+        "max_memory_bytes": 2147483648,
+        "disk_bytes": 15032385536,
+        "max_disk_bytes": 34359738368,
+        "uptime_seconds": 45000,
+        "network": {
+          "evidence": {
+            "source": "guest_config",
+            "state": "restricted",
+            "observed_at": "2026-11-27T13:20:50Z"
+          },
+          "items": []
+        },
+        "measurements": {
+          "evidence": {
+            "source": "guest_rrd",
+            "state": "missing",
+            "observed_at": "2026-11-27T13:20:50Z"
+          },
+          "items": []
+        },
+        "tasks": {
+          "evidence": {
+            "source": "guest_tasks",
+            "state": "restricted",
+            "observed_at": "2026-11-27T13:20:50Z"
+          },
+          "items": []
+        }
+      }
+    ],
+    "pools": [],
+    "datastores": []
+  },
+  "stale": {
+    "profile": "pve-native/v1",
+    "status": "stale",
+    "coverage": "token_scope",
+    "observed_at": null,
+    "evidence": null,
+    "nodes": [],
+    "guests": [],
+    "pools": [],
+    "datastores": []
+  },
+  "unavailable": {
+    "profile": "pve-native/v1",
+    "status": "unavailable",
+    "coverage": "token_scope",
+    "observed_at": null,
+    "evidence": null,
+    "nodes": [],
+    "guests": [],
+    "pools": [],
+    "datastores": []
+  }
+}

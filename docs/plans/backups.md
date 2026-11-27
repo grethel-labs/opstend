@@ -178,9 +178,13 @@ external HTTPS repository and empty restore VM. No production fixture assumed.
 
 The RC1 off-host recovery criterion covers loss of the source host and its
 storage. The operator accepts the measured offline Restic restore on the
-physically separate PC and in its fresh QEMU guest for that criterion. The installed
-HTTPS pipeline and application-level restore still require the evidence below.
-Recovery from a site-wide outage remains outside the tested scope.
+physically separate PC and in its fresh QEMU guest for that criterion.
+The retention and single-host recovery checks are closed for RC1.
+Managed scheduling and activation are a separate, partially tested profile
+deferred from RC1. Reuse the [installed scheduler and restore evidence](../STATUS.md#2026-11-26--b08-installed-scheduled-backup-and-independent-encrypted-copy).
+Resume the open checks when the profile is scheduled for activation with a
+signed candidate and the authorized fixtures above. Site-wide recovery
+requires its own evidence.
 
 1. Prepare an activation candidate: full configuration validation, schema,
    examples and documentation. Removing `backup.enabled` from unavailable

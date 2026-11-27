@@ -1,0 +1,57 @@
+.host-members, .host-service-choices, .host-reviewed-services { margin: 0; padding: 0; list-style: none; }
+.host-members li, .host-service-choices li, .host-reviewed-services li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.host-members li { padding-inline: 18px; }
+.host-members p, .host-service-meta p, .host-reviewed-services p { margin: 4px 0 0; color: var(--muted); font-size: .8rem; }
+.host-member-actions, .host-workflow-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.host-management-note, .host-management-notice { margin: 0; padding: 0 18px 12px; }
+.host-management-notice:empty { display: none; }
+.host-management-note { padding-top: 8px; }
+.host-management-note p { margin: 0 0 6px; }
+.host-workflow-body { display: grid; gap: 14px; min-width: 0; padding: 4px 18px 18px; }
+.host-workflow-body p { margin: 0; }
+.host-workflow-body select, .host-workflow-body input[type="number"] {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+}
+.host-workflow-body > select { max-width: 460px; }
+.host-workflow-body fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.host-workflow-body legend { margin: 0 0 8px; font-weight: 650; }
+.host-workflow-body label { display: grid; gap: 5px; color: var(--muted); font-size: .8rem; }
+.host-workflow-body .host-budget-gpu { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.host-workflow-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 135px), 1fr));
+  gap: 8px 12px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.host-workflow-facts dt { margin: 0 0 4px; color: var(--muted); font-size: .75rem; }
+.host-workflow-facts dd { margin: 0; overflow-wrap: anywhere; }
+.host-service-meta, .host-service-action { min-width: 0; }
+.host-service-action { flex: 0 1 250px; }
+.host-service-action label { margin-bottom: 5px; }
+.host-budget-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 132px), 1fr)); gap: 10px; margin-top: 10px; }
+.host-reviewed-services li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 12px; }
+.host-reviewed-services p { grid-column: 1 / -1; }
+.host-workflow-error { margin: 0 18px 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
+@media (max-width: 700px) {
+  .host-members li, .host-service-choices li { flex-direction: column; align-items: flex-start; }
+  .host-service-action { flex: none; width: 100%; }
+  .host-member-actions .button, .host-workflow-buttons .button { min-height: 44px; }
+}

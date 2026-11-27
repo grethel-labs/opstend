@@ -42,15 +42,22 @@ Sicht-/Bedienungslücke der heterogenen Flotte.
 | Pi agentenlos weiterführen oder nativen Arm64-Agenten betreiben | Agentenlos verursacht weniger Betrieb und eignet sich für Status und Kapazität. Ein nativer Agent lohnt bei konkretem Bedarf an sicherer lokaler Aktion und eigener Host-Evidenz. |
 | Eingebautes Dashboard oder vorhandene Observability-Sammlung | Integrierte Projektion bleibt Bedienpfad. Prometheus-/OTel-Anbindung für längere Zeitachsen oder mehr Quellen nach realer Last. [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/) |
 | Topologie über Konfiguration, L2-Nachbarn oder echte Flows | Bestehende Provenienz erhalten. Ein L2- oder Flow-Adapter bleibt lesend, gekennzeichnet und auf einen registrierten Beobachtungsbereich begrenzt. Hubble ist ein Beispiel für eine plattformspezifische Kubernetes-Flow-Quelle. [Hubble Dokumentation](https://docs.cilium.io/en/stable/observability/hubble/) |
-| Nativ mehr Plattformprofile gleichzeitig oder nacheinander | Je Betriebssystem/Architektur eine testbare Kombination. PVE Arm64, OpsTend Linux Arm64 und ein NAS-Adapter erhalten getrennte Supportzeilen. [PVE Arm64 Plattformhinweise](https://forum.proxmox.com/threads/proxmox-virtual-environment-now-available-for-64-bit-arm-arm64.185526/) |
+| Nativ mehr Plattformprofile gleichzeitig oder nacheinander | Je Betriebssystem/Architektur eine testbare Kombination. PVE Arm64, Steward Linux Arm64 und ein NAS-Adapter erhalten getrennte Supportzeilen. [PVE Arm64 Plattformhinweise](https://forum.proxmox.com/threads/proxmox-virtual-environment-now-available-for-64-bit-arm-arm64.185526/) |
 
-**Umfang:** Eine zusätzliche reale OS-/Architektur-Kombination nach
-S02-Verfahren oder ein primär benötigter Geräteadapter, plus der
-kleinste benötigte Datenausgang. Geräte- oder Appliance-Schreiben
-setzt eine eigene registrierte Aktion, minimale Rolle, native Quittung
-und Rückweg voraus. Eine verlässlich registrierte Außenschnittstelle
-kann ihr Schema über OpenAPI dokumentieren. [OpsTend OS-Profile](../repositories-release.md#s02--add-one-osarchitecture-profile-at-a-time) ·
+**Umfang:** Debian, Fedora und Arch verwenden denselben
+Container-Bedienvertrag wie Ubuntu. Qualifiziere Betriebssystem,
+Architektur und Runtime je Profil nach dem S02-Verfahren. Ergänze
+weitere UniFi-Modelle und VLAN-, Firewall- oder ACL-Operationen
+einzeln mit registrierter Aktion, Rolle, Readback und Rückweg.
+Weitere Geräte oder Flow-Quellen erhalten eigene Sichtgrenzen
+und Quellenangaben. [Steward OS-Profile](../repositories-release.md#s02--add-one-osarchitecture-profile-at-a-time) ·
 [OpenAPI Initiative](https://openapis.org/what-is-openapi/)
+
+Der NAS-/Backup-Assistent erhält je nach Bedarf ein qualifiziertes
+WD-My-Cloud-Profil, Google Drive, Dropbox und Internxt. Prüfe
+Zugangserneuerung, Rechte, Quoten und einen echten Nutzdaten-Restore.
+Für iCloud Drive beginnt die Prüfung mit einem optionalen Export.
+Details je Ziel stehen in der [Anbietermatrix](../rc2-webapp.md#backup-ziele-einrichten).
 
 **Abnahme:** Signierter Installationspfad auf der konkret unterstützten
 Plattform, erneute Anwendung, Reboot, Isolation, Scope und Beobachtungen.
@@ -107,6 +114,12 @@ ergänzen, wenn Zielorganisationen sie brauchen.
 [OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html) ·
 [SCIM Protocol](https://www.rfc-editor.org/rfc/rfc7644.html)
 
+Ein von OpsTend installiertes und aktualisiertes Basisprofil erweitert
+die Anbindung aus NX01. Qualifiziere die gemeinsame Wiederherstellung
+von Verzeichnis, DNS, CA und Zeitsynchronisation sowie den unabhängigen
+Bootstrap-Zugang. Weitere VPN-Standorte und Edge-Ersatzinstanzen
+erhalten einen eigenen Platzierungs- und Umschaltbeleg.
+
 **Abnahme:** WAN-Partition während eines Auftrags, zeitweise getrennter
 Identitätsdienst, simuliertes vollständiges Standortversagen und
 Rückkehr des alten Standorts. Erlaubte egress- und credentialgebundene
@@ -117,8 +130,8 @@ nachweisbares externes Fencing und Berechtigungswechsel voraus.
 ## 5 · Weitere dynamische Dienste und hardwaregebundene KI
 
 **Auslöser**: CPU-, Speicher- oder Schlüsselgrenzen rechtfertigen die
-Verlagerung weiterer Steward-Rollen. Die Steuerung und Backup-Planung
-haben den CP03-Ausfalltest stabil bestanden.
+Verlagerung weiterer Steward-Rollen. Flottenkoordination,
+Backup-Planung und Geräte-Connector haben den CP03-Ausfalltest bestanden.
 
 | Rolle | Eigenes Daten- und Freigabemodell |
 |---|---|
@@ -133,7 +146,7 @@ Ersatzprofil möglich. Reproduzierbare Modellreferenzen und ein
 belegter Cache erleichtern Übernahme. KI bleibt optional;
 Berechtigung, Gast-HA, Wiederherstellung und Deterministik nutzen
 weiter die regulären Verträge.
-[Linux-/KI-Profil](05-linux-devices-and-ai.md) · [OpsTend HA](07-steward-ha.md) ·
+[Linux-/KI-Profil](05-linux-devices-and-ai.md) · [Steward HA](07-steward-ha.md) ·
 [KI-Arbeitspakete](../ai.md)
 
 **Abnahme:** Ein konkreter Workload, reale Ressourcen-/Isolationsprobe,

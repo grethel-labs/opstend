@@ -1,0 +1,24 @@
+.own-update { display: grid; gap: 14px; }
+.own-update-instances, .own-update-actions { padding: 2px 18px 12px; }
+.own-update-facts { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 0; padding: 4px 18px 12px; }
+.own-update-facts dt { color: var(--muted); font-size: .76rem; }
+.own-update-facts dd { margin: 4px 0 0; font-size: .88rem; font-weight: 650; }
+.own-update .manage-form { max-width: 390px; }
+.own-update-feedback { padding: 0 18px 12px; }
+.own-update-feedback:empty { display: none; }
+.own-update-active { margin: 0 18px; font-size: .82rem; }
+.own-update-active summary { cursor: pointer; color: var(--accent); font-weight: 650; }
+.own-update-active dl { display: grid; gap: 8px; }
+.own-update-active dd { margin: 4px 0 0; }
+.own-update-active code, .own-update-table td code { white-space: pre-wrap; }
+.own-update-table td { vertical-align: top; }
+.own-update-table td .button { display: block; margin-top: 5px; }
+@media (max-width: 770px) {
+  .own-update :is(.own-update-actions,.own-update-instances) .button { min-height: 44px; }
+}
+@media (max-width: 630px) {
+  .own-update-table thead { position: absolute; clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }
+  .own-update-table, .own-update-table tbody, .own-update-table tr, .own-update-table td, .own-update-table th { display: block; }
+  .own-update-table td::before { content: attr(data-label); display: block; margin-bottom: 4px; color: var(--muted); font-size: .75rem; }
+  .own-update-table td { padding-block: 7px; }
+}

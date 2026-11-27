@@ -1,0 +1,245 @@
+:is(.zorec-mascot, .zorec-launcher) {
+  --zorec-tile: #e8f5f1;
+  --zorec-tile-line: #a8cbc4;
+}
+
+.zorec-mascot {
+  --zorec-shell: #0b7168;
+  --zorec-shell-line: #111827;
+  --zorec-screen: #0b232a;
+  --zorec-expression: #a4f2e3;
+  --zorec-signal: #b8e6fb;
+  flex: none;
+  width: var(--zorec-mascot-size, 40px);
+  height: var(--zorec-mascot-size, 40px);
+  pointer-events: none;
+}
+
+:root[data-theme="dark"] :is(.zorec-mascot, .zorec-launcher) {
+  --zorec-tile: #172b34;
+  --zorec-tile-line: #416268;
+}
+
+:root[data-theme="dark"] .zorec-mascot {
+  --zorec-shell: #11645f;
+  --zorec-shell-line: #69cfbf;
+  --zorec-screen: #101c2c;
+  --zorec-expression: #b4ffec;
+  --zorec-signal: #8cbcd3;
+}
+
+.zorec-mascot-tile { fill: var(--zorec-tile); stroke: var(--zorec-tile-line); }
+.zorec-mascot-shell { fill: var(--zorec-shell); stroke: var(--zorec-shell-line); }
+.zorec-mascot-screen { fill: var(--zorec-screen); }
+.zorec-mascot-port { fill: var(--zorec-signal); }
+.zorec-mascot :is(.zorec-mascot-eyes, .zorec-mascot-marks) { stroke: var(--zorec-expression); }
+.zorec-mascot-body { transform-origin: 32px 32px; }
+.zorec-mascot-eyes { transform-origin: 32px 28px; }
+.zorec-mascot-wink { transform-origin: 24px 28px; }
+.zorec-mascot [data-face] { display: none; }
+.zorec-mascot[data-gesture="neutral"] [data-face="neutral"],
+.zorec-mascot[data-gesture="listening"] [data-face="listening"],
+.zorec-mascot[data-gesture="thinking"] [data-face="thinking"],
+.zorec-mascot[data-gesture="answered"] [data-face="answered"],
+.zorec-mascot[data-gesture="missing-data"] [data-face="missing-data"],
+.zorec-mascot[data-gesture="limit"] [data-face="limit"],
+.zorec-mascot[data-gesture="offline"] [data-face="offline"],
+.zorec-mascot[data-gesture="setup"] [data-face="setup"],
+.zorec-mascot[data-gesture="verifying"] [data-face="verifying"],
+.zorec-mascot[data-gesture="scanning"] [data-face="scanning"],
+.zorec-mascot[data-gesture="selection"] [data-face="selection"],
+.zorec-mascot[data-gesture="awaiting-download"] [data-face="awaiting-download"],
+.zorec-mascot[data-gesture="failed"] [data-face="failed"],
+.zorec-mascot[data-gesture="ready"] [data-face="ready"],
+.zorec-mascot[data-gesture="awaiting-approval"] [data-face="awaiting-approval"],
+.zorec-mascot[data-gesture="executing"] [data-face="executing"],
+.zorec-mascot[data-gesture="recovered"] [data-face="recovered"],
+.zorec-mascot[data-gesture="embarrassed"] [data-face="embarrassed"] { display: inline; }
+
+.zorec-mascot:is([data-gesture="answered"], [data-gesture="ready"], [data-gesture="recovered"]) .zorec-mascot-port { fill: var(--zorec-expression); }
+.zorec-mascot:is([data-gesture="missing-data"], [data-gesture="limit"], [data-gesture="awaiting-approval"]) .zorec-mascot-port { fill: #ffda91; }
+.zorec-mascot[data-gesture="failed"] .zorec-mascot-port { fill: #ffadba; }
+.zorec-mascot[data-gesture="offline"] .zorec-mascot-port { fill: #798a9c; }
+.zorec-mascot[data-gesture="offline"] .zorec-mascot-eyes { opacity: .5; }
+
+:is(.zorec-mascot, .zorec-launcher)[data-mood="sleepy"] {
+  --zorec-mood-light: #edf0fb; --zorec-mood-light-ink: #4c5985;
+  --zorec-mood-dark: #252b46; --zorec-mood-dark-ink: #d3dafa;
+}
+:is(.zorec-mascot, .zorec-launcher)[data-mood="warning"] {
+  --zorec-mood-light: #fff3cf; --zorec-mood-light-ink: #78500c;
+  --zorec-mood-dark: #392c22; --zorec-mood-dark-ink: #ffd378;
+}
+:is(.zorec-mascot, .zorec-launcher)[data-mood="critical"] {
+  --zorec-mood-light: #ffe0e6; --zorec-mood-light-ink: #94243a;
+  --zorec-mood-dark: #472934; --zorec-mood-dark-ink: #ffacb9;
+}
+:is(.zorec-mascot, .zorec-launcher)[data-mood="working"] {
+  --zorec-mood-light: #daf2fb; --zorec-mood-light-ink: #165d78;
+  --zorec-mood-dark: #183747; --zorec-mood-dark-ink: #98def8;
+}
+:is(.zorec-mascot, .zorec-launcher)[data-mood="approval"] {
+  --zorec-mood-light: #f3e5ff; --zorec-mood-light-ink: #673889;
+  --zorec-mood-dark: #382743; --zorec-mood-dark-ink: #edb9fd;
+}
+:is(.zorec-mascot, .zorec-launcher)[data-mood="maintenance"] {
+  --zorec-mood-light: #e1eafb; --zorec-mood-light-ink: #334c85;
+  --zorec-mood-dark: #222f4b; --zorec-mood-dark-ink: #b6cdff;
+}
+:is(.zorec-mascot, .zorec-launcher)[data-mood="recovered"] {
+  --zorec-mood-light: #e2f5e6; --zorec-mood-light-ink: #226942;
+  --zorec-mood-dark: #1d3930; --zorec-mood-dark-ink: #98edb3;
+}
+:is(.zorec-mascot, .zorec-launcher)[data-mood="offline"] {
+  --zorec-mood-light: #e9edf2; --zorec-mood-light-ink: #414e63;
+  --zorec-mood-dark: #292e3a; --zorec-mood-dark-ink: #bbc5d4;
+}
+:is(.zorec-mascot, .zorec-launcher)[data-mood="embarrassed"] {
+  --zorec-mood-light: #fbe9f0; --zorec-mood-light-ink: #843656;
+  --zorec-mood-dark: #432a37; --zorec-mood-dark-ink: #f6bed6;
+}
+:is(.zorec-mascot, .zorec-launcher)[data-mood]:not([data-mood="quiet"]) {
+  --zorec-tile: var(--zorec-mood-light);
+  --zorec-mood-ink: var(--zorec-mood-light-ink);
+  --zorec-tile-line: color-mix(in srgb, var(--zorec-mood-ink) 38%, var(--zorec-tile));
+}
+:root[data-theme="dark"] :is(.zorec-mascot, .zorec-launcher)[data-mood]:not([data-mood="quiet"]) {
+  --zorec-tile: var(--zorec-mood-dark);
+  --zorec-mood-ink: var(--zorec-mood-dark-ink);
+}
+.zorec-mascot[data-mood]:not([data-mood="quiet"]) { overflow: visible; }
+.zorec-mood-bubble, .zorec-mascot [data-mood-symbol], .zorec-mascot [data-mood-face], .zorec-mascot-sweat, .zorec-mascot-cheeks { display: none; }
+.zorec-mascot[data-mood]:not([data-mood="quiet"]) .zorec-mood-bubble {
+  display: inline;
+  fill: var(--zorec-tile);
+  stroke: var(--zorec-mood-ink);
+}
+.zorec-mascot:not([data-zorec-follow]) .zorec-mood-bubble { transform: translate(21px, 22px) scale(.77); }
+.zorec-mood-bubble [data-mood-symbol] { fill: none; }
+.zorec-mascot[data-mood="sleepy"] [data-mood-symbol="sleepy"],
+.zorec-mascot[data-mood="warning"] [data-mood-symbol="warning"],
+.zorec-mascot[data-mood="critical"] [data-mood-symbol="critical"],
+.zorec-mascot[data-mood="working"] [data-mood-symbol="working"],
+.zorec-mascot[data-mood="approval"] [data-mood-symbol="approval"],
+.zorec-mascot[data-mood="maintenance"] [data-mood-symbol="maintenance"],
+.zorec-mascot[data-mood="recovered"] [data-mood-symbol="recovered"],
+.zorec-mascot[data-mood="offline"] [data-mood-symbol="offline"],
+.zorec-mascot[data-mood="embarrassed"] [data-mood-symbol="embarrassed"] { display: inline; }
+.zorec-mascot[data-mood="sleepy"]:not([data-gazing]) .zorec-mascot-eyes [data-face],
+.zorec-mascot:is([data-mood="critical"], [data-mood="embarrassed"]) .zorec-mascot-eyes [data-face],
+.zorec-mascot[data-gesture="neutral"]:is([data-mood="warning"], [data-mood="working"], [data-mood="approval"], [data-mood="recovered"], [data-mood="offline"]) .zorec-mascot-eyes [data-face] { display: none; }
+.zorec-mascot[data-mood="sleepy"]:not([data-gazing]) [data-mood-face="sleepy"],
+.zorec-mascot[data-mood="critical"] [data-mood-face="critical"],
+.zorec-mascot[data-mood="embarrassed"] [data-mood-face="embarrassed"],
+.zorec-mascot[data-gesture="neutral"][data-mood="warning"] [data-mood-face="warning"],
+.zorec-mascot[data-gesture="neutral"][data-mood="working"] [data-mood-face="working"],
+.zorec-mascot[data-gesture="neutral"][data-mood="approval"] [data-mood-face="approval"],
+.zorec-mascot[data-gesture="neutral"][data-mood="recovered"] [data-mood-face="recovered"],
+.zorec-mascot[data-gesture="neutral"][data-mood="offline"] [data-mood-face="offline"] { display: inline; }
+.zorec-mascot[data-mood="critical"] .zorec-mascot-sweat { display: inline; fill: #9ee6ff; stroke: #12313a; stroke-width: 1; }
+.zorec-mascot[data-mood="embarrassed"] .zorec-mascot-cheeks { display: inline; fill: #ff96ac; }
+.zorec-mascot[data-mood="offline"] .zorec-mascot-port { fill: #798a9c; }
+.zorec-mascot[data-mood="offline"] .zorec-mascot-eyes { opacity: .5; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .zorec-mascot[data-zorec-follow] .zorec-mascot-gaze {
+    transform: translate(var(--zorec-gaze-x, 0px), var(--zorec-gaze-y, 0px));
+    transition: transform 130ms ease-out;
+  }
+  .zorec-mascot[data-zorec-idle][data-gesture="neutral"]:is(:not([data-mood]), [data-mood="quiet"]) .zorec-mascot-eyes { animation: zorec-blink 9s ease-in-out infinite; }
+  .zorec-mascot[data-zorec-idle][data-gesture="neutral"]:is(:not([data-mood]), [data-mood="quiet"]) .zorec-mascot-wink { animation: zorec-wink 18s ease-in-out infinite; }
+  .zorec-mascot[data-zorec-idle][data-gesture="neutral"]:is(:not([data-mood]), [data-mood="quiet"]) .zorec-mascot-body { animation: zorec-drift 17s ease-in-out infinite; }
+  .zorec-mascot[data-zorec-idle][data-gesture="neutral"]:is(:not([data-mood]), [data-mood="quiet"]) .zorec-mascot-port { animation: zorec-idle-signal 13s ease-in-out infinite; }
+  .zorec-mascot[data-gesture="listening"] .zorec-mascot-body { animation: zorec-listen .45s ease-out; }
+  .zorec-mascot:is([data-gesture="answered"], [data-gesture="ready"], [data-gesture="recovered"]) .zorec-mascot-body { animation: zorec-acknowledge .55s ease-out; }
+  .zorec-mascot:is([data-gesture="thinking"], [data-gesture="verifying"], [data-gesture="executing"]) .zorec-mascot-port { animation: zorec-work-signal .9s ease-in-out 2; }
+  .zorec-mascot[data-mood="working"][data-zorec-idle] .zorec-mascot-port { animation: zorec-work-signal 3s ease-in-out infinite; }
+  .zorec-mascot[data-gesture="scanning"] .zorec-mascot-scan { animation: zorec-scan .75s ease-in-out 2; }
+  .zorec-mascot[data-gesture="failed"] .zorec-mascot-body { animation: zorec-shake .4s ease-out; }
+  .zorec-mascot[data-mood="sleepy"]:not([data-gazing]) .zorec-mascot-body { animation: zorec-doze 5s ease-in-out infinite; }
+  .zorec-mascot[data-mood="critical"] .zorec-mascot-body { animation: zorec-startle .75s ease-out; }
+  .zorec-mascot[data-mood="critical"] .zorec-mascot-sweat { animation: zorec-sweat .75s ease-out; }
+  .zorec-mascot[data-mood="working"] .zorec-gear {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: zorec-turn 4s linear infinite;
+  }
+  .zorec-mascot[data-mood="working"] [data-mood-symbol="working"] > g:last-child .zorec-gear { animation-direction: reverse; }
+  .zorec-mascot[data-mood="recovered"] .zorec-mascot-body { animation: zorec-acknowledge .55s ease-out; }
+  .zorec-mascot[data-mood="embarrassed"] .zorec-mascot-body { animation: zorec-shy .75s ease-out; }
+  #zorec-dialog .zorec-mascot[data-zorec-idle][data-gesture="listening"] .zorec-mascot-eyes {
+    animation: zorec-blink 9s ease-in-out infinite;
+  }
+  #zorec-dialog .zorec-mascot[data-zorec-idle][data-gesture="listening"] .zorec-mascot-body {
+    animation: zorec-listen .45s ease-out, zorec-chat-breathe 8s ease-in-out .45s infinite;
+  }
+  #zorec-dialog .zorec-mascot[data-zorec-idle]:is([data-gesture="answered"], [data-gesture="recovered"]) .zorec-mascot-body {
+    animation: zorec-acknowledge .55s ease-out, zorec-chat-breathe 8s ease-in-out .55s infinite;
+  }
+  :root:has(#zorec-dialog[open]) .zorec-mascot[data-zorec-follow] * { animation-play-state: paused; }
+}
+
+@keyframes zorec-doze {
+  0%, 100% { transform: translateY(1px) rotate(3deg); }
+  50% { transform: translateY(4px) rotate(5deg); }
+}
+@keyframes zorec-startle {
+  0%, 100% { transform: none; }
+  18% { transform: translateY(-3px) rotate(-4deg); }
+  45% { transform: rotate(3deg); }
+  68% { transform: rotate(-2deg); }
+}
+@keyframes zorec-sweat {
+  0% { opacity: 0; transform: translateY(-4px); }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes zorec-turn { to { transform: rotate(1turn); } }
+@keyframes zorec-shy {
+  0%, 100% { transform: none; }
+  48% { transform: translateY(2px) rotate(-5deg); }
+}
+@keyframes zorec-blink {
+  0%, 41%, 44%, 81%, 84%, 86%, 89%, 100% { transform: scaleY(1); }
+  42.5%, 82.5%, 87.5% { transform: scaleY(.13); }
+}
+@keyframes zorec-wink {
+  0%, 64%, 66%, 100% { transform: scaleY(1); }
+  65% { transform: scaleY(.13); }
+}
+@keyframes zorec-drift {
+  0%, 20%, 37%, 100% { transform: none; }
+  27% { transform: translateY(-2px) rotate(-3deg); }
+  32% { transform: translateY(-.7px) rotate(1.5deg); }
+}
+@keyframes zorec-chat-breathe {
+  0%, 100% { transform: none; }
+  50% { transform: translateY(-2px); }
+}
+@keyframes zorec-idle-signal {
+  0%, 60%, 77%, 100% { opacity: 1; }
+  67% { opacity: .35; }
+  72% { fill: var(--zorec-expression); }
+}
+@keyframes zorec-listen {
+  0%, 100% { transform: none; }
+  45% { transform: translateY(1px) rotate(4deg); }
+}
+@keyframes zorec-acknowledge {
+  0%, 100% { transform: none; }
+  35% { transform: translateY(-5px); }
+  68% { transform: translateY(1px); }
+}
+@keyframes zorec-work-signal {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; fill: var(--zorec-expression); }
+}
+@keyframes zorec-scan {
+  0% { transform: translateY(-13px); opacity: .2; }
+  100% { transform: translateY(1px); opacity: .65; }
+}
+@keyframes zorec-shake {
+  0%, 100% { transform: none; }
+  24% { transform: translateX(-2.5px); }
+  51% { transform: translateX(2px); }
+  76% { transform: translateX(-1px); }
+}

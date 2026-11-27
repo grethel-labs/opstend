@@ -10,13 +10,13 @@ stehen in [Ausbaustufen nach RC2](10-follow-up-iterations.md).
 
 | Stand | Benutzbare Fähigkeit nach Abnahme | Voraussetzungen und Entscheidung |
 |---|---|---|
-| M9: Ein PVE-Host | Nativ installierter Agent, lokale Bedienung, QEMU/LXC und nachgewiesene Gastaktionen | S01-Freigabe, geeigneter PVE-Testhost, bekannte PVE-API- und Paketversion. UI und CLI aus demselben signierten Build prüfen. |
-| M10: Flotte | Einzelhosts und bestehende PVE-Instanzen in einer Oberfläche, gemeinsame Richtlinien und verlässliche Ownership | Einzelne Steuerung mit Recovery. Abnahme mit mindestens zwei autorisierten Instanzen und gleichen VMIDs. |
-| M11: Backup und Recovery | Sicht auf Schutzumfang, Fehler, Kopien und tatsächliche Restores | Für Restic freigegebene B08-Kette. Externen PBS- und Restic-Zugang und reale Wiederherstellungsziele rechtzeitig prüfen; Deckungslücke kann unabhängig von Implementierung offen bleiben. |
-| M12: PVE HA | Native Gastaufnahme, Wartung, Eignung und reale Wiederanlaufbelege | Geeignete drei physische Testknoten, ausgewähltes Storage-Profil und Backup-Belege. |
-| M13: Gemischte Flotte | PVE, Linux, Gerät, NAS, Graph, Metriken, private Scopes | Zwei echte Linux-Clients mit getrenntem Netzpfad, reale NAS-/Gerätesicht sowie passende Browser- und API-Fixtures. |
-| M14: Steuerungs-Hochverfügbarkeit | Opt-in 2-von-3-Quorum, Rollenwechsel, Hot-Standbys, gesicherte Übergabe externer Jobs | CP01 Snapshot, Replay und Wiederanlauf; CP02 Nachweis vor CP03-Verfügbarkeitsfreigabe. |
-| M15: RC2 | Integrierte Referenzflotte, Folgeinstallation aus Release, Wiederherstellung und konkrete Support-Matrix | Qualifizierte lokale und externe Testziele, Schlüssel außerhalb des Verbunds, signiertes Release und Rückkehrpfad. |
+| M9 · Ein PVE-Host | Stabile lokale Bedienung, QEMU/LXC, Inventar, Anlage und Gastaktionen | S01-Freigabe, geeigneter PVE-Testhost und API-Version. UI und CLI aus demselben signierten Build prüfen. |
+| M10 · Flotte und Bedienbasis | Einzelhosts und PVE-Instanzen mit gemeinsamer Navigation, Farbschema, Zorec, Katalog und Richtlinien | Zwei autorisierte Instanzen mit gleichen VMIDs. UI01 prüft Rollen, Frische, konkurrierende Entwürfe und Katalogabdeckung. |
+| M11 · Gemischter Betrieb und Topologie | PVE und lokaler/externer Linux-Anschluss, Podman-Lifecycle, echte UniFi- und NAS-Daten, Excaliplant-Live-Karte | Freigegebenes Ubuntu-Profil, Cloud Gateway und Switch. Grundbedienung und Live-Graph laufen auch bei noch ausstehenden Backup- und HA-Daten. |
+| M12 · Basisdienste, VPN und Wiederherstellung | Referenz-Identität, DNS, CA, Zeit, verwalteter Tunnel und extern bestätigte HTTPS-Route. Separat NAS-Assistent, PBS-/Restic-Kopien und Restores | Für NX01–NX02 freigegebene Zone, Identität, Zeitquelle und externer Host. Für Restic freigegebene B08-Kette und unabhängiges Restore-Ziel. |
+| M13 · Grundverwaltung, Netzänderung und Fernzugang | PVE-Konsole und Standardänderungen, native HA, bestätigte reversible UniFi-Änderung und Portalzugänge | PH01–PH03 auf drei geeigneten physischen Knoten. Autorisiertes Netzprofil mit Rückweg und berechtigte Ziele für Portal-HTTPS, SSH und Desktop. |
+| M14 · Steuerungs-Hochverfügbarkeit | 2-von-3-Quorum, Hot-Standbys, Geräte-Connector und gesicherte Übernahme externer Jobs | CP01 Snapshot, Replay und Wiederanlauf. CP02-Nachweis vor CP03-Verfügbarkeitsfreigabe. |
+| M15 · RC2 | Betrieb, Verbund und Wiederanlauf nach IR01. Upgrade, signierte Veröffentlichung und Support-Matrix nach IR02 | Qualifizierte lokale und externe Testziele, private Recovery-Identität, Schlüssel außerhalb des Verbunds und belegter Rückkehrpfad. |
 
 Nach jedem Stand kann der erprobte Umfang zusammenhängend demonstriert
 werden. Vorzeitige Kombinationen erhalten dokumentierte Capability-
@@ -33,7 +33,7 @@ weiterhin ohne einen externen Datenbankdienst funktioniert.
 | Physisches Lab | Hostverlust, Watchdog/Fencing, unabhängige Boot- und Storage-Pfade, RPO/RTO, NAS-/LAN-/WAN-Abhängigkeit | Gate gilt nur für qualifizierte Topologie und genehmigte Testziele. |
 | Unabhängiger externer Restore | Offsite-Lesbarkeit, Schlüssel, isoliertes Ziel, Anwendungstest, dokumentierter RPO/RTO-Wert | Anwendbar auf tatsächlich getestete Daten, Backends und Standorte. |
 
-[OpsTend Testebenen](../../testing.md) ·
+[Steward Testebenen](../../testing.md) ·
 [Jepsen Consistency Models](https://jepsen.io/consistency/models) ·
 [NIST Contingency Planning Guide](https://csrc.nist.gov/pubs/sp/800/34/r1/upd1/final)
 
@@ -74,6 +74,9 @@ auch wenn die Laufzeitziele erreicht sind.
 | Backup-Store voll, geänderte Schlüssel oder Origin-Snapshot entfernt | Getrennter Copy-, Prüfer- und Restore-Zustand. Belegte unabhängige Kopie bleibt verwendbar. | BK09–BK11 |
 | PVE-Minderheit, Gast-Storage nicht verfügbar oder Passthrough | Keine falsche Claim-/HA-Aufnahme. Native Recovery und Nutzdatenbeleg für qualifizierbare Zielknoten. | PH01–PH03 |
 | Verstecktes Gerät, Scope-Entzug oder verspätete Source Events | Keine indirekten Details in Metriken, Graph, Suche oder Zählern. Historie und Frische stimmen. | IN01–IN03 |
+| Sitzungsablauf, API-Ausfall und konkurrierender Entwurf | Korrekte Zustände bei Zielwechsel, Reload und zu spät eingegangener Antwort. | UI01 |
+| Ausfall von DNS, Identitätsdienst, Zeitquelle, VPN oder Zertifikat | Betroffene Route und Logins zeigen ihre Ursache. Unabhängige lokale Dienste und der private Bootstrap-Zugang bleiben erreichbar. | NX01–NX03 |
+| Widerrufene Portalrolle oder veralteter Netz-Entwurf | Zielsitzung endet. Netzänderung erfolgt erst nach gültiger Freigabe. Native Netzkonfiguration und Wirkung sind ablesbar. | NX03–NX04 |
 | Alte CP-Rolle wacht vor einem bereits beanspruchten nativen Aufruf auf | Kein erneut erteilter Claim auf der Ressource; bekannte UPID wird verfolgt; unabhängige Jobs gehen weiter. | CP02 |
 | Quorumverlust, volle Datenbank oder unvereinbare Rollenversion | Schreibbereitschaft sichtbar eingeschränkt, kontrollierter Recovery-Pfad mit Quittungen. | CP01–CP03 |
 | NAS und WAN jeweils einzeln getrennt | Betroffene Ketten korrekt, lokale unabhängige Dienste weiterlaufend. Der reale Scope und die Restores bleiben nachvollziehbar. | IR01 |
@@ -113,7 +116,7 @@ echten Zielpfaden verwenden ausdrücklich dafür freigegebene Testdaten.
 
 [Kubernetes: Beispiel für explizite Version Skew Policy](https://kubernetes.io/releases/version-skew-policy/) ·
 [SLSA Provenance](https://slsa.dev/spec/v1.2/provenance) ·
-[OpsTend Release-Karte S01](../repositories-release.md#s01--verifiable-signed-release-for-an-accepted-feature-subset)
+[Steward Release-Karte S01](../repositories-release.md#s01--verifiable-signed-release-for-an-accepted-feature-subset)
 
 ### Support-Matrix und Ergebnisdarstellung
 

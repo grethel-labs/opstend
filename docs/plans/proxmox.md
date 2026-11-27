@@ -95,9 +95,38 @@ veralterte Freigabe, belegte VMID, verlorene Antwort und wiederholter
 Auftrag ohne zweite native Ausführung. Snapshot-Löschung, Gastlöschung,
 erzwungenes Ausschalten und freie API-Kommandos liegen außerhalb der Karte.
 
+## PX04 — Erweiterte Grundverwaltung in Proxmox VE
+
+**Voraussetzung:** PX03, UI01, FL03. BK10 für Aktionen mit
+Backup-Voraussetzung, PH02 für die geplante Verlagerung von HA-Gästen.
+
+1. Biete in der Gastansicht eine autorisierte native Konsole und
+   typisierte Änderungen an CPU, RAM, unterstütztem Storage und
+   einer Gast-Netzzuordnung. Der Plan unterscheidet laufend
+   anwendbare Änderung und erforderlichen Neustart. Er zeigt
+   betroffenen Datastore, Bridge/VLAN, Kapazität und lokale Gerätebindung.
+   Nicht unterstützte Spezialfälle erhalten einen Link zum nativen Objekt.
+2. Ergänze Snapshot-Anlage und Restore für ein qualifiziertes
+   Storage-Profil, geplante Verlagerung über die qualifizierten
+   PVE-Aktionen und kontrollierte Gastentfernung im Testprofil.
+   Destruktive Aktionen zeigen betroffene Daten und erfordern eine
+   gebundene Freigabe mit dem nötigen Sicherungsnachweis. Erfolg
+   verlangt nativen Task-Abschluss und Readback der beabsichtigten
+   Wirkung. Ein ungewisser Task behält die Sperre aus PX03.
+3. Ordne jede Aktion der Support-Matrix für QEMU, LXC, Einzelhost
+   und HA zu. Ein Operator benutzt denselben Ablauf in der lokalen
+   und der Flottenansicht. Die Detailansicht zeigt den nativen
+   Zustand und eventuelle Grenzen je Ziel.
+
+**Check/done**: Im freigegebenen PVE-Profil Konsole und je eine
+typische Ressourcen- und Netzänderung auf echten Testgästen prüfen.
+Snapshot/Restore mit Nutzdaten validieren. Für geplante Verlagerung
+und Entfernen positive Zieltests sowie abgewiesene Fälle mit
+ungeeigneter Gerätebindung oder fehlender Freigabe belegen.
+
 ## PH01 — HA-Inventar und Eignungsprüfung
 
-**Voraussetzung:** FL03 und M11-Backup-Pfad für die HA-Testgäste.
+**Voraussetzung:** FL03 und BK10 für die HA-Testgäste aus M12.
 **Einstieg:** PX02, Infrastrukturinventar, Backup-Katalog aus BK10.
 
 1. Lies aus einem vorbereiteten PVE-Cluster Mitglieder, Quorum, Clusterzustand,
@@ -155,7 +184,7 @@ Zielkapazität und ein blockierter Gast lösen keinen weiteren Schritt aus.
 1. Prüfe die in PH01 definierte Fencing-Kette bei Ausfall eines PVE-Hosts.
    Erfasse PVE-Quorum, Fencing-Ereignis, Gastplatzierung, Wiederanlaufzeit
    und Nutzdaten-Lesetest. PVE entscheidet über den neuen Start, und
-   OpsTend verfolgt den Übergang in der Oberfläche.
+   Steward verfolgt den Übergang in der Oberfläche.
 2. Prüfe eine Netzpartition mit Mehrheits- und Minderheitsseite, gefolgt
    von Quorumverlust oder fehlendem Storage im Testprofil. Die Steuerung
    zeigt die beobachtete Ursache, sperrt passende Schreibpfade und gleicht
@@ -163,7 +192,7 @@ Zielkapazität und ein blockierter Gast lösen keinen weiteren Schritt aus.
    Gast erhält einen expliziten Hinweis auf den vorbereiteten Restore-Pfad.
 3. Bringe den ausgefallenen Knoten zurück. Prüfe, dass Gäste und deren
    beobachtete Instanz eindeutig bleiben und dass eine Rückkehr nicht
-   eigenmächtig einen durch OpsTend veranlassten Gaststart auslöst.
+   eigenmächtig einen durch Steward veranlassten Gaststart auslöst.
    Abweichende RPO/RTO-Werte werden mit Ursache erfasst.
 
 **Check/done**: Physische Fencing-/Quorum-Abnahme mit aufgezeichneten

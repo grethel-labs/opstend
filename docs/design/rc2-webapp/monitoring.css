@@ -1,0 +1,66 @@
+.monitor-filters {
+  display: grid;
+  grid-template-columns: auto minmax(130px, 200px) auto minmax(130px, 170px) 1fr;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 14px;
+  padding: 12px 16px;
+}
+.monitor-filters label, .monitor-filters small { color: var(--muted); font-size: .8rem; }
+.monitor-filters small { justify-self: end; }
+.monitor-filters select {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--panel-muted);
+}
+.monitor-layout { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(0, 1.5fr); align-items: start; gap: 14px; }
+.monitor-hosts td { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.monitor-hosts th button { border-radius: 3px; }
+.monitor-hosts tr:has([aria-pressed="true"]),
+.monitor-hosts tr:has([aria-pressed="true"]) th { background: var(--accent-soft); }
+.monitor-hosts .data-table th small { display: block; margin-top: 3px; color: var(--muted); font-size: .74rem; font-weight: 400; }
+.monitor-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 10px 18px; border-block: 1px solid var(--line); }
+.monitor-summary span { display: block; color: var(--muted); font-size: .78rem; }
+.monitor-summary strong { display: block; margin-top: 4px; font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+.monitor-plot {
+  --monitor-ram: #7053ad;
+  --monitor-storage: #146586;
+  display: block;
+  width: 100%;
+  height: auto;
+  padding: 5px 10px 0;
+}
+html[data-theme="dark"] .monitor-plot { --monitor-ram: #c0a7ff; --monitor-storage: #8bd4f2; }
+.monitor-grid line { stroke: var(--line); }
+.monitor-grid text { fill: var(--muted); font-size: 10px; }
+.monitor-trace { color: var(--accent); }
+.monitor-trace-ram { color: var(--monitor-ram); }
+.monitor-trace-storage { color: var(--monitor-storage); }
+.monitor-trace polyline { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.monitor-trace circle { fill: currentColor; }
+.monitor-context { padding: 10px 18px 14px; }
+.monitor-samples { margin: 4px 18px 0; border-top: 1px solid var(--line); }
+.monitor-samples summary { width: fit-content; padding-block: 8px; cursor: pointer; color: var(--accent); font-size: .84rem; font-weight: 650; }
+.monitor-samples .table-wrap { max-height: 230px; }
+.monitor-legend { display: flex; flex-wrap: wrap; gap: 10px; padding: 4px 18px; font-size: .8rem; color: var(--muted); }
+.monitor-legend span::before { content: ""; display: inline-block; width: 12px; height: 3px; margin-right: 6px; vertical-align: middle; background: var(--accent); }
+.monitor-legend span + span::before { background: #9875d5; }
+#monitor-series-title { scroll-margin-top: 74px; }
+@media (max-width: 1050px) {
+  .monitor-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 770px) {
+  .monitor-filters { grid-template-columns: auto minmax(0, 1fr); }
+  .monitor-filters select { min-height: 43px; font-size: 1rem; }
+  .monitor-filters small { grid-column: 1 / -1; justify-self: start; }
+  .monitor-hosts .data-table :is(th, td) { padding-inline: 6px; }
+  .monitor-hosts th button { min-height: 32px; }
+  .monitor-grid text { font-size: 13px; }
+  .monitor-summary { gap: 7px; padding-inline: 12px; }
+  .monitor-summary strong { font-size: 1.12rem; }
+  .monitor-context .button { min-height: 44px; }
+}

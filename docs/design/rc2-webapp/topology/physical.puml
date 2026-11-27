@@ -1,0 +1,14 @@
+@startuml
+top to bottom direction
+
+component "UniFi Cloud Gateway" as gateway
+component "Switch · Werkstatt" as sw
+node "nuc-a · Proxmox VE" as pve
+node "host-b · Linux" as linux
+database "Pi-NAS" as nas
+
+gateway -- sw : P1 · 10 Gbit/s
+sw -- pve : P2 · 10 Gbit/s
+sw -- linux : P3 · 2,5 Gbit/s
+sw -- nas : P4 · 2,5 Gbit/s
+@enduml

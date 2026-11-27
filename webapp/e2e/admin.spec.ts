@@ -213,7 +213,7 @@ test("apply is bound to saved revisions and shows the durable outcome across pol
   expect(original).toMatch(projectMemory);
   const unsupported = await saveRevision(page, original.replace(projectMemory, "    memory_mb: 384"));
   await expectRevisions(page, unsupported, applied);
-  await expect(plan).toContainText("./opstend deploy");
+  await expect(plan).toContainText("./steward deploy");
   await expect(apply).toHaveCount(0);
   const unsupportedResponse = await page.request.post(APPLY, {
     data: { head: unsupported, applied },

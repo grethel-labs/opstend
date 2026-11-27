@@ -11,8 +11,8 @@ und ihrem unterstützten Backend.
 |---|---|---|---|
 | Native PVE-Sicherung zu PBS mit unabhängigem PBS-Pull | Gastkonfiguration und geschützte Gast-Volumes, native Restore-Integration, deduplizierte Speicherung, Namespace- und Sync-Verwaltung | PBS-Host und Datastore je Kopie, unabhängige Aufbewahrung, Repository-Rechte sowie recoveryfähige Verschlüsselungsschlüssel | Referenzpfad für PVE-Gäste. [PBS Installation](https://pbs.proxmox.com/docs/installation.html) · [PBS Remotes](https://pbs.proxmox.com/docs/managing-remotes.html) |
 | Native PVE-Dateisicherung auf dafür qualifiziertem NFS-/CIFS-Storage | Einfacher lokaler Start und transportierbares Archiv. Ein NAS kann ein solches Ziel bereitstellen. | Mehr Daten für Vollarchive. Rechte, Performance, Dateisystemeigenschaften und Wiederherstellungsweg müssen geprüft werden. Ein lokales NAS ist im Standortausfall Teil derselben Ausfalldomäne. | Geeignet als lokales Betreiber-Backup und als beobachteter Altpfad. Automatismus für unabhängigen Archivexport braucht einen eigenen Nachweis. [PVE VM/CT Backup](https://github.com/proxmox/pve-docs/blob/master/vzdump.adoc) |
-| Restic über HTTPS | Deckt registrierte Linux-/Anwendungsdaten und kleine externe Deployment- oder Steuerzustandsartefakte ab. Existierender Steward-Workflow mit Prüfung und Restore. | Verlässliche Erfassung vor Upload. Speicher, Egress, Laufzeit und getrennte Lese-/Schreib-/Prune-Rechte qualifizieren. | Bevorzugte Option für einen der Ubuntu-vServer. [OpsTend Backup Foundation](../../backup-foundation.md) · [rest-server](https://github.com/restic/rest-server) |
-| PBS-Datastore mit S3-Backend | Entkoppelt Datastore-Volumen von VPS-Systemplatte. Seit PBS 4.2 offiziell unterstützt. | PBS bleibt als Server mit persistentem lokalem Cache nötig. Anbieter-, API-, Egress- und Restore-Kosten qualifizieren. Ein Datastore hat genau eine aktive PBS-Instanz. | Alternative für den externen PBS-Pfad nach separater Prüfung. Keine notwendige Voraussetzung für die erste M11-Abnahme. [PBS 4.2 Release History](https://pbs.proxmox.com/wiki/Roadmap#Proxmox_Backup_Server_4.2) · [PBS Backup Storage](https://pbs.proxmox.com/docs/storage.html) |
+| Restic über HTTPS | Deckt registrierte Linux-/Anwendungsdaten und kleine externe Deployment- oder Steuerzustandsartefakte ab. Existierender Steward-Workflow mit Prüfung und Restore. | Verlässliche Erfassung vor Upload. Speicher, Egress, Laufzeit und getrennte Lese-/Schreib-/Prune-Rechte qualifizieren. | Bevorzugte Option für einen der Ubuntu-vServer. [Steward Backup Foundation](../../backup-foundation.md) · [rest-server](https://github.com/restic/rest-server) |
+| PBS-Datastore mit S3-Backend | Entkoppelt Datastore-Volumen von VPS-Systemplatte. Seit PBS 4.2 offiziell unterstützt. | PBS bleibt als Server mit persistentem lokalem Cache nötig. Anbieter-, API-, Egress- und Restore-Kosten qualifizieren. Ein Datastore hat genau eine aktive PBS-Instanz. | Alternative für den externen PBS-Pfad nach separater Prüfung. Das erste M12-Referenzprofil nutzt qualifizierte PBS-/Restic-Ziele und einen lokalen NAS-Anschluss. [PBS 4.2 Release History](https://pbs.proxmox.com/wiki/Roadmap#Proxmox_Backup_Server_4.2) · [PBS Backup Storage](https://pbs.proxmox.com/docs/storage.html) |
 | Externes Offline- oder zeitweise getrenntes Medium | Übersteht Ausfälle oder Kompromittierung des online erreichbaren Standorts. | Bedienaufwand, Kopierintervall, Schlüsselzugriff und regelmäßig geprobter Rückweg. | Zusätzliche Betreiberoption für ausgewählte Schutzklassen. Eine online verfügbare Offsite-Kopie hat weiterhin eigenen Wert. [PBS Wartung](https://pbs.proxmox.com/docs/maintenance.html) |
 
 PVE-Storage-Replikation, ein NAS-Spiegel und eine PBS-Kopie lösen
@@ -75,7 +75,7 @@ oder RTO nicht aus.
 | Steward-Steuerzustand | Verschlüsselter bestätigter Datenbanksnapshot, Release- und Schema-Hinweis, separat verwahrte Schlüssel und registrierte Zielreferenzen. | Isolierter Restore in neuer Generation, alte Schreibwege gesperrt, Auftrags- und Zielabgleich abgeschlossen. |
 
 [PVE Backup-Modi und Volume-Deckung](https://github.com/proxmox/pve-docs/blob/master/vzdump.adoc) ·
-[OpsTend HA Wiederanlauf](07-steward-ha.md)
+[Steward HA Wiederanlauf](07-steward-ha.md)
 
 Der Zustandskatalog führt **Capture**, **Backup im Primärziel**, **externe
 Kopie**, **Integritätsprüfung** und **wiederhergestellte Nutzdaten** als
@@ -110,7 +110,7 @@ als abgeschlossen.
 
 ## Zeitplan, Wiederholungen und Drill
 
-Ist ein nativer Zeitplan vorhanden, importiert OpsTend zunächst seine
+Ist ein nativer Zeitplan vorhanden, importiert Steward zunächst seine
 Zuständigkeit und sein letztes Ergebnis. Eine zentrale Übernahme verwendet
 FL03. Der Job bindet Schutzobjekt, Zeitfenster, Richtlinienrevision und
 Executor-Autorität. Schreibende Phase und natives Ergebnis sind vor

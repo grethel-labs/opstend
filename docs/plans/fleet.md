@@ -110,7 +110,12 @@ Linux-/Restic-Pfad. **Einstieg:** bestehende Backup-Schemata,
    Retention und administrative Löschrechte bleiben getrennt. Unterscheide
    im Katalog NAS/Freigabe, Backup-Dienst und unabhängige Kopie. Prüfe für
    ein externes vServer-Ziel nutzbaren Speicher, Durchsatz, Netzpfad und
-   unterstütztes Backend vor der Freigabe.
+   unterstütztes Backend vor der Freigabe. Der UI-Assistent führt von
+   Zieltyp und Protokoll über Zugangsreferenz, Verbindungs- und
+   Kapazitätsprüfung zu Zeitplan und Wiederherstellungsprobe. Er
+   startet mit einem konkreten lokalen NAS-Profil sowie PBS und Restic.
+   Weitere Zieltypen folgen dem gleichen Vertrag je bestätigter
+   Anbieterfähigkeit. [Anbietermatrix](rc2-webapp.md#backup-ziele-einrichten)
 3. Plane Backups mit Wartungsfenstern, Bandbreiten-, Kapazitäts- und
    Parallelitätsgrenzen pro Ziel/Standort. Unterscheide beobachtete native
    PVE/PBS-Zeitpläne von Steward-verantworteter Ausführung. Bei Übernahme
@@ -121,7 +126,9 @@ Linux-/Restic-Pfad. **Einstieg:** bestehende Backup-Schemata,
 Zielablehnung bei fehlender Kapazität, unzulässigen Rechten,
 doppelter Zeitplanverantwortung oder fehlendem Schutzumfang.
 Ein Geräte- oder Linux-Anschluss ohne Backup-Fähigkeit ist im Katalog
-als eigene Deckungslücke identifizierbar.
+als eigene Deckungslücke identifizierbar. Ein reales NAS-Ziel wird
+über den Assistenten registriert und geprüft. Ein fehlgeschlagener
+Zugriff führt zu einer konkreten Korrekturmöglichkeit im Formular.
 
 ## BK10 — Native PBS-Sicherung, Restic und Offsite-Evidenz
 

@@ -1,0 +1,35 @@
+.zorec-console-form {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  margin-top: 10px;
+}
+.zorec-console-form label {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 4px;
+  color: var(--muted);
+  font-size: .78rem;
+}
+.zorec-console-form input {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--panel-muted);
+  font: .87rem ui-monospace, monospace;
+}
+.zorec-console-form input[data-zorec-console-prepared] {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+.zorec-console-form .button { flex: none; }
+.zorec-console-notice { margin-top: 5px; color: var(--muted); font-size: .76rem; }
+@media (max-width: 520px) {
+  .zorec-console-form :is(input, .button) { min-height: 44px; }
+  .zorec-console-form input { font-size: 1rem; }
+}

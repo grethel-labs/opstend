@@ -1,0 +1,94 @@
+.zorec-chat-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.zorec-chat-workspace > .zorec-chat { min-width: 0; }
+
+.zorec-activity, .zorec-diagram {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel-muted);
+}
+.zorec-activity-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.zorec-activity-heading {
+  --zorec-mascot-size: 36px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.zorec-activity-heading p { margin-top: 2px; color: var(--muted); font-size: .76rem; }
+.zorec-activity-close { flex: none; width: 36px; padding: 0; font-size: 1.1rem; }
+.zorec-activity-body, .zorec-diagram-body { overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; }
+:is(.zorec-activity, .zorec-diagram) :is(.zorec-activity-body, h3):focus-visible { outline-offset: -3px; }
+
+.zorec-activity-run {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.zorec-activity-context { display: grid; gap: 4px; margin: 0; min-width: 0; font-size: .78rem; }
+.zorec-activity-context > div { display: grid; grid-template-columns: 3.7rem minmax(0, 1fr); }
+.zorec-activity-context dt { color: var(--muted); }
+.zorec-activity-context dd { margin: 0; overflow-wrap: anywhere; }
+.zorec-run-status { display: inline-flex; align-items: center; gap: 6px; font-size: .75rem; font-weight: 700; }
+.zorec-run-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.zorec-run-status[data-run-status="running"] { color: var(--accent); }
+.zorec-run-status[data-run-status="done"] { color: var(--success); }
+.zorec-run-status[data-run-status="error"] { color: var(--danger); }
+.zorec-activity-empty { padding: 16px 14px; color: var(--muted); font-size: .83rem; line-height: 1.5; }
+
+.zorec-activity-steps { margin: 0; padding: 0; list-style: none; }
+.zorec-activity-steps > li {
+  display: grid;
+  grid-template-columns: 21px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.zorec-step-mark, .zorec-step-status { color: var(--muted); }
+.zorec-step-mark {
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  font: 700 .83rem ui-monospace, monospace;
+}
+.zorec-step-text { overflow-wrap: anywhere; }
+.zorec-step-text strong { font-size: .82rem; }
+.zorec-step-text p { margin-top: 3px; color: var(--muted); font-size: .76rem; line-height: 1.4; }
+.zorec-step-status { padding-top: 3px; font-size: .73rem; }
+.zorec-activity-steps [data-step-status="active"] { background: var(--accent-soft); }
+.zorec-activity-steps [data-step-status="active"] :is(.zorec-step-mark, .zorec-step-status) { color: var(--accent); }
+.zorec-activity-steps [data-step-status="done"] :is(.zorec-step-mark, .zorec-step-status) { color: var(--success); }
+.zorec-activity-steps [data-step-status="error"] :is(.zorec-step-mark, .zorec-step-status) { color: var(--danger); }
+
+@media (min-width: 820px) {
+  .deploy-dialog.chat-open.zorec-side-open { width: min(1000px, calc(100vw - 44px)); }
+  .zorec-side-open .zorec-chat-workspace { grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr); }
+  :is(.zorec-activity, .zorec-diagram) { border-inline-start: 1px solid var(--line); }
+}
+@media (max-width: 819px) {
+  .zorec-side-open .zorec-chat-workspace > .zorec-chat { display: none; }
+  .zorec-activity-close { width: 44px; min-height: 44px; }
+}

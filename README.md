@@ -35,9 +35,9 @@
 > **0.1.0rc1 source.** Earlier VM runs established the single-host baseline for
 > installation, repeat deployment, reboot and isolation. The candidate subset
 > also covers guarded configuration recovery, bounded project and host scanning,
-> the tested maintenance window and health probe paths, and private IPv4 LAN
-> administration. The signed candidate archive and its installation, upgrade,
-> unchanged redeploy and reboot evidence are pending. See [current status](docs/STATUS.md) and the
+> and the tested maintenance window and health probe paths. The signed candidate
+> archive and its installation, upgrade, unchanged redeploy and reboot evidence
+> are pending. See [current status](docs/STATUS.md) and the
 > [documentation index](docs/README.md).
 
 ## What a deployment sets up on the server
@@ -114,7 +114,7 @@ Node.js ≥ 22.
 
 For the signed RC1 path, start from a separately trusted controller checkout
 for the same OpsTend version as the archive. The checkout supplies
-`./opstend`, the Ansible playbooks, roles and connection plugin, and the
+`./steward`, the Ansible playbooks, roles and connection plugin, and the
 controller dependency pins. The signed archive supplies the target wheel
 (including the web UI), runtime dependency pins and sample application bundles,
 along with the signed manifest, subset, SBOM and provenance. Obtain the Ed25519
@@ -128,21 +128,21 @@ mkdir -p config && cp examples/server.lan.yml config/server.yml
 $EDITOR config/server.yml            # adjust server.name, host, user
 
 # 2. Generate admin token (≥ 32 random bytes, 0600, outside Git, never displayed)
-./opstend secrets init-admin-token --config config/server.yml
+./steward secrets init-admin-token --config config/server.yml
 
 # 3. Verify the signed archive, validate configuration and deploy
-./opstend release verify /path/to/opstend-release.tar.gz \
+./steward release verify /path/to/steward-release.tar.gz \
   --public-key /path/to/trusted-release-key.pub
-./opstend validate --config config/server.yml --limit my-server
-./opstend deploy --config config/server.yml --limit my-server \
-  --release-archive /path/to/opstend-release.tar.gz \
+./steward validate --config config/server.yml --limit my-server
+./steward deploy --config config/server.yml --limit my-server \
+  --release-archive /path/to/steward-release.tar.gz \
   --release-public-key /path/to/trusted-release-key.pub
 
 # 4. Check status
-./opstend status   --config config/server.yml --limit my-server
+./steward status   --config config/server.yml --limit my-server
 ```
 
-The first invocation of `./opstend` sets up a pinned, hash-verified controller
+The first invocation of `./steward` sets up a pinned, hash-verified controller
 environment (Ansible, collections) under `.steward/`.
 
 `deploy` requires the signed archive and trusted key from RC1 onward. It checks
@@ -164,7 +164,7 @@ the default source scope. If no address qualifies or several qualify, set
 Use `admin.lan.allowed_sources` for explicit RFC1918 source CIDRs. Automatic
 redeployment reuses the applied scope. Set the pair explicitly to change it.
 Browser drafts for LAN access also require the explicit pair. Use
-`./opstend deploy` to activate a new scope or switch back to loopback.
+`./steward deploy` to activate a new scope or switch back to loopback.
 
 On an existing guarded (schema 2) installation whose release predates LAN
 support, run two ordinary signed deployments. First upgrade the release using
@@ -190,14 +190,14 @@ ssh -N -p 22 -L 9443:127.0.0.1:9443 deploy@my-server
 ### Kill switch
 
 ```bash
-./opstend killswitch on --config config/server.yml --limit my-server
+./steward killswitch on --config config/server.yml --limit my-server
 # or directly on the server, independently of the web UI and controller:
-sudo /opt/steward/current/venv/bin/opstend-host killswitch on
+sudo /opt/steward/current/venv/bin/steward-host killswitch on
 ```
 
 ## Commands
 
-Run `./opstend --help` for command options. These are the usual controller entry
+Run `./steward --help` for command options. These are the usual controller entry
 points.
 
 | Command | Purpose |
@@ -235,11 +235,11 @@ A YAML file is the single source of desired state
   HTTPS and real Discord delivery acceptance are still open. See the
   [operations guide](docs/operations.md) and [card state](docs/STATUS.md#card-state).
 - Weekly maintenance windows and admission are available. The healthy container
-  probe host gate is deferred for RC1. Announced maintenance drills remain guarded.
+  probe host gate and announced maintenance drills remain open.
 - Public configuration validation blocks Restic backup activation, application
   stacks and per-application critical-risk response, verified image updates,
   repository deployments and builds, automatic patch/repair, AI providers and
-  the local AI profile. Prior host evidence for separate group operations covers
+  the local AI profile. The VM101 evidence for separate group operations covers
   the guarded private renderer. See the [card state](docs/STATUS.md#card-state).
 
 ## Development

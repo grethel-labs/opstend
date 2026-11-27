@@ -1,0 +1,16 @@
+@startuml
+top to bottom direction
+
+component "VLAN 10\nVerwaltung" as management
+component "VLAN 20\nDienste" as services
+component "VLAN 30\nStorage" as storage
+node "nuc-a · Proxmox VE\nVM Medien · LXC Fotos\nVM Entwicklung" as pve
+node "host-b · Podman\nSensorik · Zeitdienst" as linux
+database "Pi-NAS\nNFS" as nas
+
+management --> pve : vmbr0
+services --> pve : vmbr1
+services --> linux : br-services
+storage --> nas : NFS-Segment
+pve ..> nas : TCP 2049 · geprüft
+@enduml

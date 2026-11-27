@@ -1,7 +1,7 @@
 # 06 · Dashboard, Topologie, Metriken und Bedienung
 
-Karte IN03 in [Infrastruktur](../infrastructure.md), FL01–FL03 für
-Identitäten und Berechtigungen. Stand der Recherche 2026-11-24.
+Karten UI01, IN03 und NX01–NX04 in [Infrastruktur](../infrastructure.md),
+FL01–FL03 für Identitäten und Berechtigungen.
 Die Oberfläche soll beantworten, was läuft, wo es liegt, was davon
 abhängt, wann es zuletzt geprüft wurde und welche Aktion verfügbar ist.
 
@@ -18,14 +18,54 @@ abhängt, wann es zuletzt geprüft wurde und welche Aktion verfügbar ist.
 
 Listenansicht und Graph sind gleichwertige Zugänge zur selben Projektion.
 IN03 beginnt mit einer gefilterten Liste, einem Detail und einem
-Fokusgraphen für den gewählten Knoten. React Flow bietet
-Tastaturfunktionen und beschriftbare Knoten. Cytoscape.js bietet
-Graphalgorithmen und ein anderes Renderingmodell. Die Auswahl nach
-kleinem Browser-Prototyp bewertet Fokuspfad, Bedienung, Reflow, dichte
-Kanten und vorhandene React-Integration. Das Datenmodell funktioniert
-mit beiden. Bibliotheksauswahl erfordert keinen Laufzeitdienst.
-[React Flow Accessibility](https://reactflow.dev/learn/advanced-use/accessibility) ·
-[Cytoscape.js](https://js.cytoscape.org/) · [WCAG 2.2](https://www.w3.org/TR/WCAG22/)
+Fokusgraphen für den gewählten Knoten. Der Bedienentwurf prüft dafür
+eine Platzierungsansicht mit kombinierbaren Ebenen für Verkabelung,
+Netzregeln und externe Zugänge. Ressourcenvergleiche bleiben in Tabellen, Messverläufe in
+Zeitreihen und Aufträge in einer chronologischen Ansicht.
+[Bedienentwurf und Browseraufnahmen](../../design/rc2-webapp/README.md) ·
+[WCAG 2.2](https://www.w3.org/TR/WCAG22/)
+
+## PlantUML und Excaliplant in der Webapp
+
+1. Die API liefert für Flotte, Standort oder Einzelobjekt einen
+   berechtigten Ausschnitt mit stabilen Objekt- und Kanten-IDs,
+   Beziehungstyp, Herkunft und Beobachtungszeit. Standortgruppen und
+   zusammengefasste Zähler begrenzen die globale Übersicht. Die
+   fokussierte Ansicht lädt die passenden Nachbarn und Ebenen nach.
+2. Ein Serializer erzeugt aus dieser Projektion ein PlantUML-
+   Deployment-Diagramm mit intern vergebenen Aliasen. Anzeigenamen
+   gehen begrenzt und als Text in feste Vorlagen ein. Der generierte
+   Quelltext nutzt einen festen Syntaxumfang ohne Includes oder
+   Benutzermakros. Platzierung, Kabel, Netzzuordnung, Regel und
+   geprüfte Erreichbarkeit behalten ihre jeweilige Bedeutung.
+3. Excaliplant rendert aus dem PlantUML-Text eine SVG-Karte für die
+   laufende Ansicht und bei Bedarf eine bearbeitbare Excalidraw-Szene
+   für den Export. IN03 prüft zuerst einen lokal gebündelten,
+   bedarfsgeladenen Web Worker nach dem Vorbild der Excaliplant-
+   Webapp. Die Anwendung übergibt Farbschema, Größen- und Zeitbudgets.
+   Ein neuer Zielkontext entwertet ältere Renderergebnisse. Bei einem
+   Renderfehler bleibt die Listenansicht mit den aktuellen Daten bedienbar.
+   [Excaliplant Web Worker](https://github.com/grethel-labs/excaliplant/blob/main/docs/site.md#how-rendering-works)
+4. React hält Auswahl, Zoom, Filter und Detailpanel. Excaliplant rendert
+   interaktives Inline-SVG. Die Browser-Hooks binden Hover, Klick und
+   Tastatur an die Karte. Knoten-Aliase und Connector-Primitiven tragen
+   Hook-IDs, die auf die stabilen Fach-IDs des Inventars abgebildet
+   werden. Die Zuordnung wird auch bei identischen Anzeigenamen geprüft.
+   [Excaliplant-Hooks](https://github.com/grethel-labs/excaliplant/blob/v1.14.2/docs/hooks.md)
+5. Eine Änderung aus dem Detailpanel erzeugt einen typisierten, an
+   Ziel und Revision gebundenen FL03-Entwurf. IPv4-Adresse, Endpunkte
+   und Beziehungsdaten ändern zunächst die Vorschauprojektion. Die
+   Karte rendert diese Projektion erneut und markiert geplante Werte.
+   Bestätigtes Apply und neuer Readback aktualisieren die beobachtete
+   Projektion. Layout und Exporte haben keine Schreibwirkung auf die
+   Infrastruktur.
+
+Die [Beispieldatei in PlantUML](../../diagrams/src/15-rc2-infrastruktur.puml)
+und die [Excaliplant-Ausgabe](../../diagrams/out/svg/15-rc2-infrastruktur.svg)
+zeigen den Weg von externen Zugängen über einen VPN-Tunnel zu Diensten
+am Standort. Dazu kommen physische Switchlinks, VLANs,
+Firewall-Regel, PVE-Gäste, Linux-Container, Passthrough und NAS.
+Der produktive Ausschnitt zeigt die jeweils autorisierten Live-Daten.
 
 ## Projektion und Quellenvertrag
 
@@ -40,6 +80,10 @@ Bestätigungen einer anderen Quelle nicht überschreiben.
 |---|---|---|---|
 | `hosts` | Beobachtete physische oder virtuelle Zuordnung | PVE oder registrierter Linux-Agent | PVE-Knoten beherbergt QEMU-VM. |
 | `attached_to` | Beobachtete oder konfigurierte Netz-/Speicherzuordnung | PVE-Konfiguration, registrierter Connector | Gast hängt an Bridge/VLAN oder Storage. Dies beweist keine durchgehende Erreichbarkeit. |
+| `physical_link` | Physische Gegenstelle und belegte Linkrate | UniFi, autorisierter Connector oder bestätigte Dokumentation | Switchport verbindet Host. Gemessener Verkehr hat seinen eigenen Zeitraum. |
+| `assigned_device` | Zugeteilte oder durchgereichte Hardware | Native PVE-/Host-Beobachtung oder markierte Dokumentation | VM verwendet die GPU, einen zugehörigen HDMI-Ausgang oder ein USB-Gerät. |
+| `allowed_by` | Wirksamer Regelausschnitt für benannte Richtung und Scope | UniFi oder qualifiziertes Firewallprofil | Eine Regel erlaubt ausgewählten Verkehr zwischen zwei VLANs. |
+| `published_via` | Gewünschte oder extern bestätigte Veröffentlichung | NX02-/NX03-Job und unabhängiger Check | Website läuft über Proxy und VPN. Portalzugriffe zeigen ihre eigene Autorität. |
 | `reachable_from` | Ergebnis eines konkreten Protokollchecks | Checkquelle mit Site, Zeit und Transport | Externer vServer erreicht einen freigegebenen HTTPS-Dienst. |
 | `depends_on` | Fachliche oder logische Abhängigkeit | Betreiberdeklaration oder belegter Anwendungsvertrag | App verwendet eine NAS-Freigabe. |
 | `backs_up_to` | Bestand einer geplanten Policy und Status des konkreten Datenpfads | PBS/Restic, Policy und Quittung | LXC hat eine externe PBS-Kopie mit letzter Prüfung. |
@@ -51,6 +95,10 @@ Alle Kanten zeigen mindestens **beobachtet**, **deklariert** oder
 Anwendungssitzung. LLDP könnte später physische Nachbarn melden und
 würde als L2-Quelle mit eingeschränkter Abdeckung geführt.
 Die Existenz einer IP weist keinen Dienstbesitz und keine L3-Policy nach.
+Ein beobachteter Client hat einen eigenen Verwaltungsstatus.
+Flottensummen zählen physische Ressourcen und geteilten Storage pro
+stabiler Quellidentität einmal. Zuteilungen, Reservierung und
+Nutzung erscheinen getrennt von Hardwarekapazität.
 [IEEE 802.1AB-2026](https://standards.ieee.org/ieee/802.1AB/11787/)
 
 | Zustandswert | Darstellung und Wirkung |
@@ -126,5 +174,8 @@ PVE-Instanz; eine weitere mehrere Instanzen ohne HA. Reale
 Stichproben vergleichen die sichtbaren Werte und Quellen mit PVE,
 dem NAS-Sensor und dem Agenten. Prüfungen decken Migration,
 WAN-Störung, verzögerte Beobachtung, Scope-Wechsel, Navigation und
-Tastaturbedienung ab. Messbedingungen, Budgets und Zielwerte für
-Geschwindigkeit gehören in [Abnahme und Iterationen](08-delivery-and-iterations.md).
+Tastaturbedienung ab. Der Produktionsbuild prüft zusätzlich den lokalen
+Renderpfad unter der CSP, den Themewechsel, die Zuordnung der Details
+bei identischen Namen sowie den Listenpfad bei einem Renderfehler.
+Messbedingungen, Budgets und Zielwerte für Geschwindigkeit gehören in
+[Abnahme und Iterationen](08-delivery-and-iterations.md).

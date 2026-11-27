@@ -1,23 +1,23 @@
 # 01 · Proxmox nativ, Gastaktionen und Alternativen
 
-Karten PX01–PX03 in [Proxmox](../proxmox.md). Stand der Recherche 2026-11-24.
+Karten PX01–PX04 in [Proxmox](../proxmox.md).
 Die Referenz nennt acht PVE-Hosts, davon drei im HA-Verbund. Dasselbe
 Anschlussprofil ist bereits mit einem eigenständigen Host nützlich.
 Produktentscheidungen gelten als Planung. Der unterstützte Versionsbereich
-entsteht aus konkreten Nachweisen in PX01–PX03.
+entsteht aus konkreten Nachweisen in PX01–PX04.
 
 ## Vergleich der Betriebs- und Integrationswege
 
-| Option | Was sie abdeckt | Aufwand und Randbedingungen | Konsequenz für OpsTend |
+| Option | Was sie abdeckt | Aufwand und Randbedingungen | Konsequenz für Steward |
 |---|---|---|---|
-| PVE-Weboberfläche und dokumentierte REST-API | Knoten, QEMU, LXC, Storage sowie administrative und asynchrone Operationen im nativen Modell | Der Client muss Tokenrechte, API-Dialekt, Ressourcenbezug und Task-Verlauf korrekt interpretieren. | PVE bleibt führend. OpsTend nutzt den REST-Vertrag und kann auf die native Oberfläche verweisen. [PVE API Viewer](https://pve.proxmox.com/pve-docs/api-viewer/) |
-| Proxmox Datacenter Manager | Zentrales Inventar mehrerer PVE- und PBS-Remotes, RRD, Gastaktionen, Migrationen auch zwischen Remotes und weitere PVE-Verwaltung | Gleichartiger Bereich wie OpsTend M9/M10. PDM besitzt eigene Registrierung, Rechte und Bedienung. | Geeigneter Vergleichsmaßstab und optional parallele Oberfläche. OpsTend liefert zusätzlich Linux-/Gerätebeziehungen, Richtlinien, Wiederherstellungsnachweise und eigene Dienstplatzierung. PDM ist keine laufende Abhängigkeit. [PDM Remotes](https://pdm.proxmox.com/docs/remotes.html) · [PDM Installation](https://pdm.proxmox.com/docs/installation.html) |
+| PVE-Weboberfläche und dokumentierte REST-API | Knoten, QEMU, LXC, Storage sowie administrative und asynchrone Operationen im nativen Modell | Der Client muss Tokenrechte, API-Dialekt, Ressourcenbezug und Task-Verlauf korrekt interpretieren. | PVE bleibt führend. Steward nutzt den REST-Vertrag und kann auf die native Oberfläche verweisen. [PVE API Viewer](https://pve.proxmox.com/pve-docs/api-viewer/) |
+| Proxmox Datacenter Manager | Zentrales Inventar mehrerer PVE- und PBS-Remotes, RRD, Gastaktionen, Migrationen auch zwischen Remotes und weitere PVE-Verwaltung | Gleichartiger Bereich wie Steward M9/M10. PDM besitzt eigene Registrierung, Rechte und Bedienung. | Geeigneter Vergleichsmaßstab und optional parallele Oberfläche. Steward liefert zusätzlich Linux-/Gerätebeziehungen, Richtlinien, Wiederherstellungsnachweise und eigene Dienstplatzierung. PDM ist keine laufende Abhängigkeit. [PDM Remotes](https://pdm.proxmox.com/docs/remotes.html) · [PDM Installation](https://pdm.proxmox.com/docs/installation.html) |
 | Ansible `community.proxmox` | Deklarative Konfiguration und geplante Betreiber- oder CI-Arbeit für Gäste, Storage, HA und ACLs | Geeignet für reproduzierbare Labore. Die Ausführung folgt dem jeweiligen Playbook und seiner Identität. | Als Betreiberwerkzeug und für freigegebene Testvorbereitung geeignet. Interaktive Steward-Jobs bleiben beim registrierten, protokollierten Executor. [Ansible Collection](https://docs.ansible.com/ansible/latest/collections/community/proxmox/index.html) |
 | OpenTofu mit einem PVE-Provider | Infrastruktur als Code mit Ressourcenzuordnung im State | Bestehende Ressourcen müssen importiert und Zuständigkeiten bei paralleler Bedienung geklärt werden. Native Fähigkeiten variieren mit dem Provider. | Extern deklarierte Ressourcen können übernommen oder beobachtet werden. Ein anderer Writer bleibt in der Zuständigkeitsansicht sichtbar. [OpenTofu State](https://opentofu.org/docs/language/state/) · [bpg/proxmox Provider](https://github.com/bpg/terraform-provider-proxmox) |
 | Direktes `qm`/`pct`, `pvesh` oder Änderungen im Cluster-Dateisystem | Lokale Bedienung und Diagnose mit dem jeweiligen Privilegienkontext | Vergrößert die Reichweite einer generischen Remote-Ausführung und koppelt an Dateistrukturen oder CLI-Ausgaben. | Für Betreiber-Diagnose und unabhängigen Soll-Ist-Check. Remote-Anforderungen sind typisierte PVE-Aktionen mit registrierten IDs. [PVE Benutzerverwaltung](https://github.com/proxmox/pve-docs/blob/master/pveum.adoc) |
 
 Ein gemischter Betrieb bleibt möglich. Für einen in OpenTofu verwalteten Gast
-kann OpsTend zum Beispiel inventarisieren und dessen Wiederherstellung
+kann Steward zum Beispiel inventarisieren und dessen Wiederherstellung
 prüfen. Provisionierung, Stromzustand und Zeitplan brauchen jeweils einen
 explizit zuständigen Workflow. Die einmalige Übergabe ist in
 [Flotte und Autorität](02-fleet-and-trust.md) beschrieben.
@@ -58,7 +58,7 @@ PVE-Dienste bleiben unter PVE-Verantwortung.
 - Version 9.2 auf amd64 ist durch den dokumentierten Release-Stand eine
   sinnvolle erste Testfamilie. Die beobachteten Paketstände entscheiden über
   Freigabe und maximale Unterstützung. PVE für Arm64 mit expliziter
-  Hardwareunterstützung und OpsTend auf Arm64 sind getrennte Prüfungen.
+  Hardwareunterstützung und Steward auf Arm64 sind getrennte Prüfungen.
   Der Raspberry Pi ist im Referenzprofil NAS. PVE dokumentiert für die
   Arm64-Ausgabe eigene Plattformgrenzen.
   [PVE 9.2 Veröffentlichung](https://www.proxmox.com/en/about/company-details/press-releases/proxmox-virtual-environment-9-2) ·
@@ -122,6 +122,7 @@ hält die Ressourcensperre über Neustarts und Agentwechsel hinweg.
 | PX01 | Build/Verifikation, isolierte Units, lesender Preflight und reproduzierbarer Rückbau. | Reales PVE amd64 mit vorhandener Test-VM und Test-LXC, jeweils Upgrade, Reboot und Rückbau. SSH, PVE, Gastnetz und bestehende Datastores bleiben funktionsfähig. |
 | PX02 | Versionsadapter, Teilinventar, Frische und Actor-scoped Cache. | Eingeschränkter Auditor und berechtigter Beobachter sehen die jeweils erwarteten Ressourcen. Rechteentzug enthält keine falsch bestätigte Abwesenheit. |
 | PX03 | Gebundene Jobs über existierende Executor-Regeln, asynchroner Readback und Konfliktpfade. | Je QEMU und LXC erzeugen und bedienen. Verlorene Antwort, zwischenzeitliche VMID-Nutzung, verbotener Pool und Wiedervorlage beweisen die Grenzen. |
+| PX04 | Konsole, Ressourcen- und Netzänderungen, Snapshot und geplanter Lifecycle im selben Gastdetail. | Reale Zieländerung, geprüfter Restore und sichere Ablehnung bei ungeeigneter Gerätebindung oder fehlender Freigabe. |
 
 Offen für PX01 bleiben konkrete PVE-Minor-/Patchstände und das endgültige
 Paketformat. PX02 verifiziert Task-Lesezugriff mit minimalen Rechten.

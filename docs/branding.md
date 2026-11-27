@@ -65,8 +65,5 @@ badges. Use system sans for interface text and monospace for commands,
 versions and checksums. Show a text label alongside status colours and give
 keyboard focus a visible outline.
 
-Current operator commands use `./opstend` on the controller and `opstend-host`
-on the server. Existing scripts can still call the old command names.
-Installed host paths, service names, accounts and the signed wheel identity
-keep their existing names so upgrades continue to use the same data and trust
-configuration. See the [upgrade notes](release.md#upgrading-from-steward).
+Shell commands, host paths and package names currently use the `steward`
+runtime identifiers shown in the installation and upgrade guides.

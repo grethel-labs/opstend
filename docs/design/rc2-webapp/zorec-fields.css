@@ -1,0 +1,19 @@
+form[data-zorec-draft-value] .object-setting-fields input[name="intervalSeconds"] {
+  background: var(--warn-soft);
+  border-color: var(--warn);
+  box-shadow: inset 3px 0 var(--warn);
+}
+
+.zorec-field-note {
+  width: fit-content;
+  margin-block: 10px;
+  padding: 5px 8px;
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: .8rem;
+  overflow-wrap: anywhere;
+}
+
+.zorec-field-note[hidden] { display: none; }
