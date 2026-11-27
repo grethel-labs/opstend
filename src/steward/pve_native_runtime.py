@@ -12,12 +12,16 @@ import stat
 import sys
 import tempfile
 import time
+from contextlib import suppress
 from datetime import UTC, datetime
+from html import escape
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from cryptography import x509
 
+from steward.core.pve_inventory import RegisteredLocalTarget, collect_inventory
+from steward.core.pve_inventory_models import InventorySnapshot
 from steward.core.pve_native import (
     API_HOST,
     PROFILE,
@@ -37,6 +41,9 @@ _INTERVAL = 30
 _STALE_AFTER = 90
 _CHECKS = ("tls", "permissions", "api_version")
 _HOSTS = {f"{UI_HOST}:{UI_PORT}", f"localhost:{UI_PORT}"}
+_INVENTORY = "inventory.json"
+_INVENTORY_LIMIT = 8 * 1024 * 1024
+_GUEST_PATH = re.compile(r"/guests/([1-9][0-9]{2,8})")
 
 
 def _credential_path(path: Path) -> str:
@@ -54,6 +61,7 @@ def render_unit(
     admin_token_file: Path | None,
     ui_cert_file: Path | None = None,
     ui_key_file: Path | None = None,
+    inventory_token_file: Path | None = None,
 ) -> str:
     _validate_api_name(api_name)
     if role == "agent":
@@ -63,6 +71,11 @@ def render_unit(
             f"LoadCredential=pve-token:{_credential_path(token_file)}\n"
             f"ReadWritePaths={_STATE}\n"
         )
+        if inventory_token_file is not None:
+            access += (
+                "SetCredential=pve-inventory-token:\n"
+                f"LoadCredential=pve-inventory-token:{_credential_path(inventory_token_file)}\n"
+            )
         args = f"agent {api_name}"
     elif role == "ui" and admin_token_file and ui_cert_file and ui_key_file:
         dependencies = "After=opstend-pve-agent.service\nRequires=opstend-pve-agent.service\n"
@@ -216,11 +229,164 @@ def read_status() -> dict:
     return _status()
 
 
+def _publish_inventory(inventory: InventorySnapshot | None, observed_boottime: float) -> None:
+    boot_id = _BOOT_ID.read_text(encoding="ascii").strip()
+    payload = inventory.model_dump(mode="json") if inventory is not None else None
+    document = json.dumps(
+        {"boot_id": boot_id, "observed_boottime": observed_boottime, "inventory": payload},
+        allow_nan=False,
+    ).encode("ascii")
+    if len(document) > _INVENTORY_LIMIT:
+        raise ValueError("Inventory snapshot is too large.")
+    # The agent is the only writer. Reuse one staging path after an unclean
+    # exit so repeated interruptions cannot accumulate inventory files.
+    temporary = _STATE / ".inventory.tmp"
+    temporary.unlink(missing_ok=True)
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(document)
+            handle.flush()
+            os.fchmod(handle.fileno(), 0o640)
+        temporary.replace(_STATE / _INVENTORY)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _load_inventory_document() -> dict:
+    directory = os.open(_STATE, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        owner = os.fstat(directory)
+        if stat.S_IMODE(owner.st_mode) & 0o022:
+            raise ValueError("Inventory state directory is writable by other users.")
+        fd = os.open(_INVENTORY, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=directory)
+        with os.fdopen(fd, "rb") as handle:
+            metadata = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or stat.S_IMODE(metadata.st_mode) != 0o640
+                or (metadata.st_uid, metadata.st_gid) != (owner.st_uid, owner.st_gid)
+                or metadata.st_nlink != 1
+            ):
+                raise ValueError("Expected an agent-owned inventory snapshot.")
+            contents = handle.read(_INVENTORY_LIMIT + 1)
+    finally:
+        os.close(directory)
+    if len(contents) > _INVENTORY_LIMIT:
+        raise ValueError("Inventory snapshot is too large.")
+    document = json.loads(contents, object_pairs_hook=_unique_object)
+    if not isinstance(document, dict) or document.keys() != {
+        "boot_id",
+        "observed_boottime",
+        "inventory",
+    }:
+        raise ValueError("Invalid inventory snapshot.")
+    return document
+
+
+def _inventory(vmid: int | None = None) -> dict:
+    result = {
+        "profile": PROFILE,
+        "status": "unavailable",
+        "coverage": "token_scope",
+        "observed_at": None,
+        "evidence": None,
+    }
+    if vmid is None:
+        result.update(nodes=[], guests=[], pools=[], datastores=[])
+    else:
+        result["guest"] = None
+    try:
+        document = _load_inventory_document()
+        payload = document["inventory"]
+        if payload is None:
+            return result
+        observed = document["observed_boottime"]
+        if type(observed) not in (int, float) or not observed >= 0:
+            return result
+        age = _boottime() - observed
+        boot_id = document["boot_id"]
+        if not isinstance(boot_id, str) or not boot_id:
+            return result
+        if age >= _STALE_AFTER or boot_id != _BOOT_ID.read_text(encoding="ascii").strip():
+            result["status"] = "stale"
+            return result
+        if not age >= 0:
+            return result
+        snapshot = InventorySnapshot.model_validate_json(json.dumps(payload, allow_nan=False))
+    except (OSError, ValueError, OverflowError, RecursionError):
+        return result
+
+    result["observed_at"] = snapshot.observed_at.isoformat()
+    result["evidence"] = snapshot.evidence.model_dump(mode="json")
+    state = snapshot.evidence.state
+    if state not in ("observed", "absent"):
+        result["status"] = "restricted" if state == "restricted" else "unavailable"
+        return result
+    result["status"] = state
+    if state == "absent":
+        if vmid is not None:
+            result["status"] = "restricted"
+        return result
+    if vmid is None:
+        for field in ("nodes", "guests", "pools", "datastores"):
+            result[field] = [row.model_dump(mode="json") for row in getattr(snapshot, field)]
+        return result
+
+    guest = next((row for row in snapshot.guests if row.vmid == vmid), None)
+    if guest is None:
+        result["status"] = "restricted"
+    else:
+        result["guest"] = guest.model_dump(mode="json")
+    return result
+
+
+def read_inventory(vmid: int | None = None) -> dict:
+    if os.geteuid() != 0:
+        raise ValueError("Run native inventory as root.")
+    if vmid is not None and (type(vmid) is not int or not 100 <= vmid <= 999_999_999):
+        raise ValueError("Use a PVE guest ID from 100 to 999999999.")
+    return _inventory(vmid)
+
+
+def _refresh_inventory(target: RegisteredLocalTarget) -> None:
+    started = _clear_inventory()
+    if started is None:
+        return
+    try:
+        snapshot = collect_inventory(target)
+        if snapshot.evidence.state != "observed":
+            snapshot = InventorySnapshot(
+                api_name=snapshot.api_name,
+                observed_at=snapshot.observed_at,
+                evidence=snapshot.evidence,
+            )
+        _publish_inventory(snapshot, started)
+    except (OSError, ValueError):
+        # Health/readiness are independent; the barrier is already visible.
+        pass
+
+
+def _clear_inventory() -> float | None:
+    try:
+        started = _boottime()
+        _publish_inventory(None, started)
+    except (OSError, ValueError):
+        # A failed barrier must not allow collection to proceed.
+        with suppress(OSError):
+            (_STATE / _INVENTORY).unlink(missing_ok=True)
+        return None
+    return started
+
+
 def _run_agent(api_name: str) -> None:
     _validate_api_name(api_name)
     credentials = _credentials()
     token = _load_token(credentials / "pve-token")
     ca_file = credentials / "pve-ca"
+    target = RegisteredLocalTarget(
+        api_name, ca_file, credentials / "pve-inventory-token", credentials / "pve-token"
+    )
 
     def observe() -> bool:
         probe = _probe_api(api_name, ca_file, token, package_ok=True)
@@ -228,12 +394,85 @@ def _run_agent(api_name: str) -> None:
         _publish(checks)
         return all(checks.values())
 
+    _clear_inventory()
     if not observe():
         raise ValueError("The initial local PVE API probe did not pass.")
     _notify_ready()
     while True:
+        _refresh_inventory(target)
         time.sleep(_INTERVAL)
         observe()
+
+
+def _html_document(title: str, body: str) -> bytes:
+    return (
+        f"<!doctype html><html lang=en><meta charset=utf-8><title>{title}</title>"
+        f"<h1>{title}</h1>{body}</html>"
+    ).encode()
+
+
+def _html_fields(fields: dict) -> str:
+    entries = []
+    for key, value in fields.items():
+        if value is None or value == []:
+            continue
+        label = key.replace("_", " ").capitalize()
+        if isinstance(value, dict):
+            content = _html_fields(value)
+        elif isinstance(value, list):
+            items = (
+                _html_fields(item) if isinstance(item, dict) else escape(str(item))
+                for item in value
+            )
+            content = "<ol>" + "".join(f"<li>{item}</li>" for item in items) + "</ol>"
+        else:
+            content = escape(str(value))
+        entries.append(f"<dt>{escape(label)}</dt><dd>{content}</dd>")
+    return "<dl>" + "".join(entries) + "</dl>"
+
+
+def _inventory_html(inventory: dict, *, detail: bool) -> bytes:
+    title = "PVE guest detail" if detail else "PVE inventory"
+    status = inventory["status"]
+    message = {
+        "observed": "Observed in the inventory token scope.",
+        "absent": "No resources were observed in the inventory token scope.",
+        "restricted": "The inventory token lacks access.",
+        "unavailable": "Inventory is unavailable.",
+        "stale": "The inventory snapshot expired.",
+    }[status]
+    if detail and status == "restricted" and inventory["evidence"]["state"] != "restricted":
+        message = "No guest was visible in this inventory token scope."
+    parts = [
+        '<nav><a href="/">Status</a> <a href="/inventory">Inventory</a></nav>',
+        f"<p>{message}</p>",
+        _html_fields({"evidence": inventory["evidence"]}),
+    ]
+    if detail:
+        guest = inventory["guest"]
+        if guest is not None:
+            parts.extend(
+                (
+                    _html_fields(guest),
+                    "<p>Guest operating system and guest agent data unprobed.</p>",
+                )
+            )
+    else:
+        for section in ("nodes", "guests", "pools", "datastores"):
+            if not inventory[section]:
+                continue
+            parts.append(f"<h2>{section.capitalize()}</h2>")
+            for row in inventory[section]:
+                if section == "guests":
+                    vmid = row["vmid"]
+                    parts.append(f'<a href="/guests/{vmid}">Guest {vmid}</a>')
+                    row = {
+                        key: value
+                        for key, value in row.items()
+                        if key not in {"network", "measurements", "tasks"}
+                    }
+                parts.append(_html_fields(row))
+    return _html_document(title, "".join(parts))
 
 
 class _StatusServer(HTTPServer):
@@ -266,11 +505,20 @@ class _StatusHandler(BaseHTTPRequestHandler):
         self.close_connection = True
         self._respond(code)
 
-    def _respond(self, code: int, body: bytes = b"", content_type: str = "text/plain") -> None:
+    def _respond(
+        self,
+        code: int,
+        body: bytes = b"",
+        content_type: str = "text/plain",
+        *,
+        vary_accept: bool = False,
+    ) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if vary_accept:
+            self.send_header("Vary", "Accept")
         self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -297,11 +545,23 @@ class _StatusHandler(BaseHTTPRequestHandler):
         if len(hosts) != 1 or hosts[0].lower() not in _HOSTS:
             self._respond(400)
             return
-        if self.path not in ("/", "/status"):
+        guest_path = _GUEST_PATH.fullmatch(self.path)
+        if self.path not in ("/", "/status", "/inventory") and guest_path is None:
             self._respond(404)
             return
         if not self._authorized():
             self._respond(401)
+            return
+        if self.path == "/inventory" or guest_path:
+            vmid = int(guest_path[1]) if guest_path else None
+            inventory = _inventory(vmid)
+            accept = self.headers.get_all("Accept", [])
+            if len(accept) == 1 and accept[0].strip().lower() == "application/json":
+                body = json.dumps(inventory).encode("ascii")
+                self._respond(200, body, "application/json", vary_accept=True)
+            else:
+                body = _inventory_html(inventory, detail=guest_path is not None)
+                self._respond(200, body, "text/html; charset=utf-8", vary_accept=True)
             return
         status = _status()
         if self.path == "/status":
@@ -311,12 +571,13 @@ class _StatusHandler(BaseHTTPRequestHandler):
             f"<dt>{name}</dt><dd>{'Passed' if result else 'Failed'}</dd>"
             for name, result in status["checks"].items()
         )
-        document = (
-            "<!doctype html><html lang=en><meta charset=utf-8><title>OpsTend native PVE</title>"
-            f"<h1>OpsTend native PVE</h1><p>Status: {status['status']}</p>"
-            f"<p>Observed at: {status['observed_at'] or 'Unavailable'}</p><dl>{checks}</dl></html>"
+        document = _html_document(
+            "OpsTend native PVE",
+            '<nav><a href="/inventory">Inventory</a></nav>'
+            f"<p>Status: {status['status']}</p>"
+            f"<p>Observed at: {status['observed_at'] or 'Unavailable'}</p><dl>{checks}</dl>",
         )
-        self._respond(200, document.encode("ascii"), "text/html; charset=utf-8")
+        self._respond(200, document, "text/html; charset=utf-8")
 
 
 def _run_ui() -> None:

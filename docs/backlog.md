@@ -48,3 +48,4 @@ privilege-escalation defect in accepted behavior.
 - Minor: controller `workload_restart` during an executor mutation logs `target_busy`; each `incident_advance` in `backup_failed`/`stop_failed` writes another `escalated` audit; audit records written under a shifted clock keep the future timestamp; a rolled-back reversible update needs a retry rather than a fresh apply for the exact fallback; G12(e) unknown probe untested on a host · L06/L08
 - Stability: expose planned-restart markers in the controller export; application-group captures are not part of the planned signal; spool scan silently capped at 64 entries · L06
 - V01: check-mode preview shows pip/restart tasks as changed on an unchanged host · V01
+- Isolate native inventory credential loading from agent startup if an operator replaces an admitted root source with an oversized or unreadable file · systemd 257 can fail health restart before the agent runs · PX02

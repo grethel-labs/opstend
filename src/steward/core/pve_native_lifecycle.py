@@ -1,5 +1,6 @@
 """Journaled upgrades and rollbacks of the native PVE installation."""
 
+import hashlib
 import os
 import re
 import stat
@@ -73,19 +74,19 @@ def _normalize_journal(raw: dict) -> dict:
 def _validate_intent(intent: dict, uids: dict) -> None:
     refs = intent["refs"]
     accounts = {native._AGENT, native._UI} if intent["mode"] == "standalone" else {native._AGENT}
+    keys = {
+        "schema",
+        "version",
+        "manifest",
+        "release_key",
+        "mode",
+        "api_name",
+        "refs",
+        "wheels",
+        "units",
+    }
     if (
-        set(intent)
-        != {
-            "schema",
-            "version",
-            "manifest",
-            "release_key",
-            "mode",
-            "api_name",
-            "refs",
-            "wheels",
-            "units",
-        }
+        not keys <= set(intent) <= keys | {"inventory_token_file"}
         or type(intent["schema"]) is not int
         or intent["schema"] != 1
         or intent["mode"] not in ("agent", "standalone")
@@ -107,12 +108,39 @@ def _validate_intent(intent: dict, uids: dict) -> None:
         or len(set(uids.values())) != len(accounts)
     ):
         raise ValueError
+    if "inventory_token_file" in intent and not _valid_inventory_ref(
+        intent["inventory_token_file"], refs
+    ):
+        raise ValueError
     native._validate_api_name(intent["api_name"])
 
 
-def _validate_operation(operation: dict | None, active: str, previous: str | None, releases: dict):
+def _valid_inventory_ref(ref: str, refs: list[str | None]) -> bool:
+    return (
+        host._SAFE_REF.fullmatch(ref) is not None
+        and Path(ref).anchor == "/"
+        and ".." not in Path(ref).parts
+        and ref not in refs
+    )
+
+
+def _validate_operation(
+    operation: dict | None, active: str, previous: str | None, releases: dict, intent: dict
+):
     if operation is None or operation["kind"] == "remove":
         # The removal implementation validates its own phase and request fields.
+        return
+    if operation["kind"] == "inventory":
+        if (
+            set(operation) != {"kind", "phase", "ref", "before", "after"}
+            or operation["phase"] not in ("activate", "restore")
+            or "inventory_token_file" in intent
+            or not _valid_inventory_ref(operation["ref"], intent["refs"])
+            or operation["before"] != intent["units"][native._AGENT]
+            or operation["before"] == operation["after"]
+            or not _DIGEST.fullmatch(operation["after"])
+        ):
+            raise ValueError
         return
     if (
         set(operation) != {"kind", "source", "target", "phase"}
@@ -163,7 +191,7 @@ def load_journal(config: Path) -> dict:
             or ("last_rollback" in journal and journal["last_rollback"] != active)
         ):
             raise ValueError
-        _validate_operation(operation, active, previous, releases)
+        _validate_operation(operation, active, previous, releases, intent)
         pending = None
         if operation and operation["kind"] == "remove":
             pending = operation["staged"]
@@ -216,7 +244,7 @@ def current_version(paths: dict[str, Path], journal: dict) -> str:
     if operation:
         if operation["kind"] == "remove":
             versions = [operation["current"]]
-        elif operation["phase"] != "stage":
+        elif operation["kind"] != "inventory" and operation["phase"] != "stage":
             versions.append(operation["target"])
     for version in versions:
         if pointer == str(_release_path(paths, version)):
@@ -247,7 +275,9 @@ def verify_package(paths: dict[str, Path], journal: dict) -> None:
     current_version(paths, journal)
 
 
-def _admit(paths: dict[str, Path], journal: dict) -> dict[str, Path]:
+def _admit(
+    paths: dict[str, Path], journal: dict, *, inventory_retry: dict | None = None
+) -> dict[str, Path]:
     verify_retained(paths, journal)
     verify_package(paths, journal)
     intent = journal["intent"]
@@ -261,15 +291,24 @@ def _admit(paths: dict[str, Path], journal: dict) -> dict[str, Path]:
                 raise InstallError("An unowned native unit enablement link already exists.")
             continue
         host._object(path, stat.S_IFREG, 0o644, host._ROOT_UID, host._ROOT_GID)
-        if release.sha256_file(path) != intent["units"][name]:
+        pending_agent = inventory_retry if name == native._AGENT else None
+        digests = {intent["units"][name]}
+        if pending_agent:
+            digests.add(pending_agent["after"])
+        if release.sha256_file(path) not in digests:
             raise InstallError("A reserved unit does not match its installation journal.")
         host._secure_directory(want.parent)
         host._link(want, path)
         systemd = host._unit_state(unit, path)
-        if systemd["UnitFileState"] != "enabled" or systemd.get("NeedDaemonReload") != "no":
+        if systemd["UnitFileState"] != "enabled" or (
+            not pending_agent and systemd.get("NeedDaemonReload") != "no"
+        ):
             raise InstallError("The reserved native unit is disabled or requires a daemon reload.")
         units[unit] = path
 
+    # Recovery needs the verified local objects even when the API is unavailable.
+    if inventory_retry is not None:
+        return units
     refs = [Path(ref) if ref is not None else None for ref in intent["refs"]]
     managed = (*paths.values(), native._UNIT_DIR)
     for ref, private in zip(refs, (False, True, True, False, True), strict=True):
@@ -311,9 +350,10 @@ def _require_ready(units: dict[str, Path]) -> None:
         raise InstallError("The native services did not remain active and enabled.")
 
 
-def reconcile_install(paths: dict[str, Path], journal: dict, intent: dict) -> dict:
-    """Accept an exact install replay against the current completed release."""
-    _require_idle(journal)
+def reconcile_install(
+    paths: dict[str, Path], journal: dict, intent: dict, prior_agent: bytes, agent: bytes
+) -> dict:
+    """Accept an exact install replay and bind an explicitly supplied inventory token once."""
     active = journal["active"]
     entry = journal["releases"][active]
     expected = {
@@ -322,10 +362,122 @@ def reconcile_install(paths: dict[str, Path], journal: dict, intent: dict) -> di
         "manifest": entry["manifest"],
         "wheels": entry["wheels"],
     }
-    if intent != expected:
-        raise InstallError("The native installation journal does not match this exact intent.")
-    _require_ready(_admit(paths, journal))
-    return _result(journal, 0)
+    ref = intent.get("inventory_token_file")
+    operation = journal["operation"]
+    if operation and operation["kind"] != "inventory":
+        _require_idle(journal)
+    if not operation and ref is None and "inventory_token_file" in expected:
+        bound_ref = expected["inventory_token_file"]
+        ca, health, admin, _, _ = intent["refs"]
+        with_inventory = pve_native_runtime.render_unit(
+            "agent",
+            api_name=intent["api_name"],
+            ca_file=Path(ca),
+            token_file=Path(health),
+            admin_token_file=Path(admin) if admin else None,
+            inventory_token_file=Path(bound_ref),
+        ).encode()
+        intent = {
+            **intent,
+            "inventory_token_file": bound_ref,
+            "units": {**intent["units"], native._AGENT: hashlib.sha256(with_inventory).hexdigest()},
+        }
+    if not operation and intent == expected:
+        if ref is not None:
+            host._inventory_credential(intent, paths)
+        _require_ready(_admit(paths, journal))
+        return _result(journal, 0)
+    if ref is not None and "inventory_token_file" not in expected:
+        before = hashlib.sha256(prior_agent).hexdigest()
+        after = hashlib.sha256(agent).hexdigest()
+        new_intent = {
+            **expected,
+            "inventory_token_file": ref,
+            "units": {**expected["units"], native._AGENT: after},
+        }
+        if intent == new_intent and before == expected["units"][native._AGENT] and before != after:
+            return _bind_inventory(paths, journal, intent, prior_agent, agent, before, after)
+    raise InstallError("The native installation journal does not match this exact intent.")
+
+
+def _activate_inventory_unit(path: Path, contents: bytes, allowed: set[str]) -> None:
+    name = path.name
+    host._object(path, stat.S_IFREG, 0o644, host._ROOT_UID, host._ROOT_GID)
+    if release.sha256_file(path) not in allowed:
+        raise InstallError("The reserved agent unit changed during inventory binding.")
+    host._unit_state(name, path)
+    with tempfile.TemporaryDirectory(dir=path.parent, prefix=".opstend-pve-stage-") as directory:
+        source = Path(directory) / "unit"
+        host._write_file(source, contents, 0o644)
+        source.replace(path)
+        host._fsync_directory(path.parent)
+    host._checked([*host._SYSTEMCTL, "daemon-reload"], "Could not reload the native agent unit.")
+    host._unit_state(name, path)
+    host._checked(
+        [*host._SYSTEMCTL, "stop", "--job-mode=ignore-dependencies", name],
+        "Could not stop the native agent service.",
+    )
+    host._checked(
+        [*host._SYSTEMCTL, "start", "--job-mode=ignore-dependencies", name],
+        "The native agent service did not become ready.",
+    )
+
+
+def _bind_inventory(
+    paths: dict[str, Path],
+    journal: dict,
+    intent: dict,
+    prior_agent: bytes,
+    agent: bytes,
+    before: str,
+    after: str,
+) -> dict:
+    operation = journal["operation"]
+    ref = intent["inventory_token_file"]
+    expected = {
+        "kind": "inventory",
+        "phase": "activate",
+        "ref": ref,
+        "before": before,
+        "after": after,
+    }
+    if operation is None:
+        host._inventory_credential(intent, paths)
+    elif operation != {**expected, "phase": operation["phase"]}:
+        raise InstallError("Resume inventory binding with the exact recorded credential reference.")
+    units = _admit(paths, journal, inventory_retry=operation)
+    unit = units[f"{native._AGENT}.service"]
+    host._verify_unmounted(unit, host._want(unit))
+    if operation is None:
+        _require_ready(units)
+        operation = journal["operation"] = expected
+        host._update_journal(paths["config"], journal)
+
+    if operation["phase"] == "activate":
+        try:
+            host._inventory_credential(intent, paths)
+            _activate_inventory_unit(unit, agent, {before, after})
+            _require_ready(units)
+        except (InstallError, native.PreflightError, *_HOST_ERRORS):
+            operation["phase"] = "restore"
+            host._update_journal(paths["config"], journal)
+        else:
+            journal["intent"]["inventory_token_file"] = ref
+            journal["intent"]["units"][native._AGENT] = after
+            journal["operation"] = None
+            host._update_journal(paths["config"], journal)
+            return _result(journal, 1)
+
+    try:
+        _activate_inventory_unit(unit, prior_agent, {before, after})
+        _require_ready(units)
+    except (InstallError, *_HOST_ERRORS):
+        raise InstallError(
+            "Native inventory binding failed and restoration is pending. Resume the exact install."
+        ) from None
+    journal["operation"] = None
+    host._update_journal(paths["config"], journal)
+    raise InstallError("Native inventory binding failed. The former agent unit was restored.")
 
 
 def _require_idle(journal: dict) -> None:

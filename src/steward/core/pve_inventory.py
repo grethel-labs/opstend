@@ -17,11 +17,13 @@ from steward.core.pve_inventory_models import (
     InventorySnapshot,
     MeasurementObservation,
     NetworkObservation,
+    NodeMeasurementObservation,
     Pool,
     ResourceIndex,
     TaskObservation,
     parse_measurements,
     parse_network,
+    parse_node_measurements,
     parse_resources,
     parse_tasks,
 )
@@ -46,7 +48,7 @@ _REQUEST_TIMEOUT = 2
 _FINAL_RESERVE = 3
 _MAX_RESPONSE = 256 * 1024
 # Initial/final permissions and resources, plus at most two exact-node checks
-# per distinct node or guest, and three detail calls per visible guest.
+# per roster node or guest, one detail call per node, and three per guest.
 _MAX_REQUESTS = 5 * MAX_RESOURCES + 4
 
 
@@ -181,6 +183,14 @@ class _Collector:
             return evidence.model_copy(update={"state": "invalid"}), ()
         return (evidence if items else evidence.model_copy(update={"state": "absent"})), items
 
+    def node_measurements(self, node: str) -> NodeMeasurementObservation:
+        evidence, items = self._observe(
+            f"/api2/json/nodes/{node}/rrddata?timeframe=hour&cf=AVERAGE",
+            "node_rrd",
+            parse_node_measurements,
+        )
+        return NodeMeasurementObservation(evidence=evidence, items=items)
+
     def guest_detail(self, guest: Guest, node_audit: bool) -> Guest:
         node = guest.node
         vmid = guest.vmid
@@ -242,6 +252,11 @@ class _Collector:
             _guest_key(guest): self.guest_detail(guest, guest.node in node_audits)
             for guest in candidates
         }
+        node_measurements = {
+            row.node: self.node_measurements(row.node)
+            for row in initial.nodes
+            if row.node in node_audits
+        }
 
         # PVE's ACL listing omits denied child paths. Read its authoritative
         # roster after the ACL check so a new child deny is enforced there.
@@ -250,9 +265,9 @@ class _Collector:
         final_nodes = {row.node for row in (*final.nodes, *final.guests)}
         node_audits = self.audited_nodes(node_audits & final_nodes, final_acl, final=True)
         nodes = tuple(
-            row
+            row.model_copy(update={"measurements": node_measurements[row.node]})
             for row in final.nodes
-            if row.node in node_audits and _has_audit(final_acl, f"/nodes/{row.node}", "Sys.Audit")
+            if row.node in node_audits and row.node in node_measurements
         )
         pool_ids = {
             row.pool

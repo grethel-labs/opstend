@@ -727,6 +727,7 @@ def _install_locked(
     token_file: Path,
     paths: dict[str, Path],
     accounts: dict[str, bytes],
+    prior_agent: bytes,
     intent: dict,
     payload: dict,
     dependencies: list[Path],
@@ -736,8 +737,24 @@ def _install_locked(
     install, config, state = (paths[key] for key in ("install", "config", "state"))
     version = install / "releases" / payload["version"]
     journal = _read_journal(config)
-    if isinstance(journal, dict) and journal.get("schema") == 2:
-        return lifecycle.reconcile_install(paths, lifecycle.load_journal(config), intent)
+    if journal and (
+        journal.get("schema") == 2
+        or (
+            journal.get("complete") is True
+            and (
+                "inventory_token_file" in intent
+                or (
+                    isinstance(journal.get("intent"), dict)
+                    and "inventory_token_file" in journal["intent"]
+                )
+            )
+        )
+    ):
+        return lifecycle.reconcile_install(
+            paths, lifecycle.load_journal(config), intent, prior_agent, accounts[native._AGENT]
+        )
+    if "inventory_token_file" in intent:
+        _inventory_credential(intent, paths)
     if journal is not None:
         _validate_install_journal(journal, intent, set(accounts))
     owned_paths, owned_units, owned_accounts = _admitted_objects(paths, accounts, journal, version)
@@ -822,6 +839,18 @@ def _install_locked(
     return {"profile": native.PROFILE, "mode": mode, "version": payload["version"], "changed": 1}
 
 
+def _inventory_credential(intent: dict, paths: dict[str, Path]) -> None:
+    ref = Path(intent["inventory_token_file"])
+    _credential(ref, (*paths.values(), native._UNIT_DIR), private=True)
+    health_token = native._load_token(Path(intent["refs"][1]))
+    inventory_token = native._load_token(ref)
+    if (
+        str(ref) in intent["refs"]
+        or inventory_token.partition("=")[0] == health_token.partition("=")[0]
+    ):
+        raise native.PreflightError("Use a separate PVE inventory token identity and file.")
+
+
 def install(
     *,
     mode: str,
@@ -834,6 +863,7 @@ def install(
     admin_token_file: Path | None = None,
     ui_cert_file: Path | None = None,
     ui_key_file: Path | None = None,
+    inventory_token_file: Path | None = None,
 ) -> dict:
     """Install or reconcile an exact native deployment on the local PVE node."""
     if os.geteuid() != _ROOT_UID:
@@ -860,6 +890,13 @@ def install(
         if ref is not None:
             _credential(ref, managed, private=private)
     native._load_token(token_file)
+    if inventory_token_file is not None and (
+        inventory_token_file.anchor != "/"
+        or not _SAFE_REF.fullmatch(str(inventory_token_file))
+        or ".." in inventory_token_file.parts
+        or inventory_token_file == release_public_key
+    ):
+        raise native.PreflightError("Use an absolute, safe and separate PVE inventory token file.")
     if standalone:
         pve_native_runtime.read_admin_token(admin_token_file)
         pve_native_runtime.validate_ui_tls(ui_cert_file, ui_key_file)
@@ -876,6 +913,16 @@ def install(
         for role, name in (("agent", native._AGENT), ("ui", native._UI))
         if role == "agent" or standalone
     }
+    prior_agent = accounts[native._AGENT]
+    if inventory_token_file is not None:
+        accounts[native._AGENT] = pve_native_runtime.render_unit(
+            "agent",
+            api_name=api_name,
+            ca_file=ca_file,
+            token_file=token_file,
+            admin_token_file=admin_token_file,
+            inventory_token_file=inventory_token_file,
+        ).encode()
     try:
         key = release.load_public_key(release_public_key)
         with release.staged_verified_release(release_archive, key) as payload:
@@ -905,6 +952,8 @@ def install(
                         name: hashlib.sha256(unit).hexdigest() for name, unit in accounts.items()
                     },
                 }
+                if inventory_token_file is not None:
+                    intent["inventory_token_file"] = str(inventory_token_file)
                 with _locked():
                     for directory in (*[path.parent for path in paths.values()], native._UNIT_DIR):
                         for ancestor in (directory, *directory.parents):
@@ -916,6 +965,7 @@ def install(
                         token_file=token_file,
                         paths=paths,
                         accounts=accounts,
+                        prior_agent=prior_agent,
                         intent=intent,
                         payload=payload,
                         dependencies=dependencies,

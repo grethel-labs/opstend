@@ -1536,6 +1536,7 @@ def cmd_pve_native_install(args: argparse.Namespace) -> int:
             admin_token_file=args.admin_token_file,
             ui_cert_file=args.ui_cert_file,
             ui_key_file=args.ui_key_file,
+            inventory_token_file=args.inventory_token_file,
         )
     except ValueError as exc:
         raise CliError(str(exc), EXIT_INVALID) from None
@@ -1578,6 +1579,19 @@ def cmd_pve_native_status(_args: argparse.Namespace) -> int:
         raise CliError(str(exc), EXIT_INVALID) from None
     except OSError:
         raise CliError("Could not read native PVE status.", EXIT_UNAVAILABLE) from None
+    say(json.dumps(result, indent=2))
+    return 0
+
+
+def cmd_pve_native_inventory(args: argparse.Namespace) -> int:
+    from ..pve_native_runtime import read_inventory
+
+    try:
+        result = read_inventory(vmid=args.vmid)
+    except ValueError as exc:
+        raise CliError(str(exc), EXIT_INVALID) from None
+    except OSError:
+        raise CliError("Could not read native PVE inventory.", EXIT_UNAVAILABLE) from None
     say(json.dumps(result, indent=2))
     return 0
 
@@ -1733,6 +1747,9 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--admin-token-file", type=Path)
             command.add_argument("--ui-cert-file", type=Path)
             command.add_argument("--ui-key-file", type=Path)
+            command.add_argument(
+                "--inventory-token-file", type=Path, help="opt in with a distinct PVE audit token"
+            )
             command.set_defaults(func=cmd_pve_native_install)
         else:
             command.set_defaults(func=cmd_pve_native)
@@ -1752,6 +1769,11 @@ def build_parser() -> argparse.ArgumentParser:
     pve_sub.add_parser("status", help="read the local native snapshot as root").set_defaults(
         func=cmd_pve_native_status
     )
+    pve_inventory = pve_sub.add_parser("inventory", help="read the scoped local inventory as root")
+    pve_inventory.add_argument(
+        "--vmid", type=int, help="show detail for one visible QEMU or LXC guest"
+    )
+    pve_inventory.set_defaults(func=cmd_pve_native_inventory)
 
     release = sub.add_parser("release", help="release tooling")
     release_sub = release.add_subparsers(dest="release_command", required=True)
