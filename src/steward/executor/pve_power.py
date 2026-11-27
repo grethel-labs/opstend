@@ -439,22 +439,27 @@ class PowerExecutor:
         return _error(failure)
 
 
-def _policy() -> PowerPolicy:
-    path = _STATE / _POLICY
+def _read_policy[T: Projection](path: Path, model: type[T]) -> T:
     try:
         install._object(path, stat.S_IFREG, 0o600, 0, 0)
         raw = native._read_file(path, 64 * 1024, private=True)
         document = json.loads(
             raw, object_pairs_hook=native._unique_object, parse_constant=native._reject_api_constant
         )
-        policy = PowerPolicy.model_validate_json(canonical_json(document))
+        policy = model.model_validate_json(canonical_json(document))
     except (install.InstallError, OSError, ValueError, RecursionError):
         raise ExecutorError(
-            "unavailable", "The native power policy is missing or invalid."
+            "unavailable", f"The native PVE policy {path.name} is missing or invalid."
         ) from None
     if policy.node != socket.gethostname().split(".", 1)[0]:
-        raise ExecutorError("policy_denied", "The native power policy targets a different node.")
+        raise ExecutorError(
+            "policy_denied", f"The native PVE policy {path.name} targets another node."
+        )
     return policy
+
+
+def _policy() -> PowerPolicy:
+    return _read_policy(_STATE / _POLICY, PowerPolicy)
 
 
 def _authority(installed: dict, paths: dict[str, Path]) -> _Authority:
@@ -499,7 +504,7 @@ def _authority(installed: dict, paths: dict[str, Path]) -> _Authority:
     return _Authority(policy, binding, api)
 
 
-def _runtime() -> PowerExecutor:
+def _runtime_context() -> tuple[dict[str, Path], dict, AuditLog]:
     for parent in reversed(_STATE.parents):
         install._secure_directory(parent)
     install._directory(_STATE, 0o700, 0, 0)
@@ -513,9 +518,14 @@ def _runtime() -> PowerExecutor:
     audit = _STATE / _AUDIT
     if native._exists(audit):
         install._object(audit, stat.S_IFREG, 0o600, 0, 0)
+    return paths, installed, AuditLog(audit)
+
+
+def _runtime() -> PowerExecutor:
+    paths, installed, audit = _runtime_context()
     return PowerExecutor(
         PowerJournal(_STATE),
-        AuditLog(audit),
+        audit,
         lambda: _authority(installed, paths),
         _policy,
         lambda: native._exists(_STATE / "kill-switch"),

@@ -346,6 +346,8 @@ def _request_api_response(
     max_response: int,
     method: Literal["GET", "POST"] = "GET",
     body: bytes = b"",
+    include_envelope: bool = False,
+    include_error_reason: bool = False,
 ) -> tuple[int, object]:
     host = f"[{api_name}]" if ":" in api_name else api_name
     headers = (
@@ -370,7 +372,7 @@ def _request_api_response(
                 with http.client.HTTPResponse(reader, method=method) as response:
                     response.begin()
                     if response.status != 200:
-                        return response.status, None
+                        return response.status, response.reason if include_error_reason else None
                     contents = response.read(max_response + 1)
                     if len(contents) > max_response or response.length:
                         raise _ApiPayloadError
@@ -385,7 +387,7 @@ def _request_api_response(
                 raise _ApiReadError from None
             except (http.client.HTTPException, ValueError, RecursionError):
                 raise _ApiPayloadError from None
-    return 200, document["data"]
+    return 200, document if include_envelope else document["data"]
 
 
 def _get_api_data(api_name: str, context: ssl.SSLContext, token: str, path: str):
