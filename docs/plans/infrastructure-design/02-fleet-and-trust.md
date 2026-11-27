@@ -53,6 +53,30 @@ Identität erhalten. Wird dieselbe VMID nach einer Löschung neu vergeben,
 wird die vorherige Backup-Historie weiterhin angezeigt. Die neue VM erbt
 keine expliziten alten Berechtigungen oder Freigaben.
 
+### Interner Identitätsvertrag (FL01.1)
+
+`FleetIdentityRegistry` speichert die vergebenen Site-, Host-, Agenten- und
+Instanz-IDs in der SQLite-Datenbank des Flottenkoordinators. Der bestätigte
+Instanznachweis ist unabhängig von Anzeigenamen und Netzwerkadressen. Jeder
+API-Pfad ist einer Instanz und einem Host zugeordnet und wird mit eigenem
+Transportnachweis bestätigt. Die Methoden zum Registrieren und Bestätigen
+sind interne Schnittstellen für den vertrauenswürdigen Koordinator.
+
+Der Koordinator übernimmt die Gastbeobachtung aus dem nativen
+`InventorySnapshot` über einen bestätigten API-Pfad. Die Position im Cluster
+ist Teil der Beobachtung. Eine andere native Gast-UID mit neuerer
+Registrierungszeit belegt eine neue Generation. Bei unklarer Kontinuität
+bindet eine ausdrückliche Bestätigung die Entscheidung an die beobachtete
+Generation und Beobachtungs-ID. Die serialisierbare Lesesicht zeigt die
+vergebenen IDs und den Gaststatus. Der Koordinator hält Identitätsnachweise,
+native Gast-UIDs und Registrierungszeiten intern.
+
+PX02 liefert eine auf das API-Token begrenzte Sicht. Ein fehlender Gast in
+dieser Sicht lässt die bisherige Generation bestehen. Nur ein erfolgreicher
+Snapshot kann eine Generation als abwesend markieren, wenn der Koordinator
+den vollständigen Gastumfang für genau diese Beobachtung und ihren API-Pfad
+bestätigt. Historische Generationen bleiben erhalten.
+
 ## Richtlinien, Eigentum und Ausführung
 
 1. Die Flottenbasis setzt Vorgaben und harte Obergrenzen. Site oder Gruppe
