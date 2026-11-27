@@ -1,5 +1,6 @@
 """Bounded evidence for the read-only adoption of a native PVE host."""
 
+from hashlib import sha256
 from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -18,6 +19,8 @@ ScheduleState = Literal[
     "rate_limited",
 ]
 Binding = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+NATIVE_BACKUP_JOB_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+NativeBackupJobId = Annotated[str, Field(pattern=NATIVE_BACKUP_JOB_PATTERN)]
 PveVersion = Annotated[str, Field(pattern=r"^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$")]
 
 _DAY = r"(?:mon|tue|wed|thu|fri|sat|sun)"
@@ -30,6 +33,12 @@ Calendar = Annotated[
         pattern=rf"^(?:hourly|daily|weekly|monthly|(?:{_DAYS}(?:,{_DAYS})* )?{_TIME})$",
     ),
 ]
+
+
+def pve_backup_job_ref(instance_binding: str, native_job_id: str) -> str:
+    return sha256(
+        f"pve-backup-job:v1:{instance_binding}:{native_job_id}".encode("ascii")
+    ).hexdigest()
 
 
 class LocalPveProfile(TimedProjection):

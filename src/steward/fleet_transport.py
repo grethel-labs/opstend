@@ -23,6 +23,8 @@ from pydantic import Field, SecretStr
 from .core.fleet_adoption_models import PveAdoptionEvidence
 from .core.fleet_enrollment import FleetEnrollment, FleetGrant
 from .core.fleet_identity import InventoryObservation, PveConnectorRoute
+from .core.fleet_ownership import OwnershipExchange, OwnershipReply
+from .core.fleet_ownership_coordinator import FleetOwnershipCoordinator
 from .core.fleet_policy import FleetPolicyConflict
 from .core.fleet_policy_apply import FleetPolicyApply, FleetPolicyDenied, FleetPolicyNotFound
 from .core.fleet_policy_reconcile import FleetPolicySyncReply, FleetPolicySyncRequest
@@ -332,6 +334,7 @@ class _FleetServer(TCPServer):
         self.enrollment = enrollment
         self.policy = FleetPolicyApply(enrollment._registry)
         self.power = FleetPowerCommands(enrollment._registry)
+        self.ownership = FleetOwnershipCoordinator(enrollment._registry)
         self.context = context
         self.routes = {
             b"POST /v1/enroll HTTP/1.1": (_Invite, self._enroll),
@@ -341,6 +344,10 @@ class _FleetServer(TCPServer):
             b"POST /v1/adoption/begin HTTP/1.1": (_Empty, self._begin_adoption),
             b"POST /v1/adoption/publish HTTP/1.1": (_AdoptionInventory, self._publish_adoption),
             b"POST /v1/pve-power-target/poll HTTP/1.1": (CommandPoll, self._poll_power),
+            b"POST /v1/pve-power-target/ownership HTTP/1.1": (
+                OwnershipExchange,
+                self._exchange_ownership,
+            ),
             b"POST /v1/policy-target/reconcile HTTP/1.1": (
                 FleetPolicySyncRequest,
                 self._reconcile_policy,
@@ -403,6 +410,12 @@ class _FleetServer(TCPServer):
             return self.power.poll(fingerprint, request)
         except FleetPolicyDenied:
             raise FleetTransportError("fleet command polling denied") from None
+
+    def _exchange_ownership(self, fingerprint: str, request: OwnershipExchange) -> OwnershipReply:
+        try:
+            return self.ownership.exchange(fingerprint, request)
+        except (FleetPolicyDenied, FleetPolicyNotFound):
+            raise FleetTransportError("fleet ownership exchange denied") from None
 
 
 def create_server(
@@ -528,6 +541,13 @@ class FleetClient:
     def poll_power(self, request: CommandPoll) -> CommandReply:
         return self._post(
             b"/v1/pve-power-target/poll", request.model_dump_json().encode(), CommandReply
+        )
+
+    def exchange_ownership(self, request: OwnershipExchange) -> OwnershipReply:
+        return self._post(
+            b"/v1/pve-power-target/ownership",
+            request.model_dump_json().encode(),
+            OwnershipReply,
         )
 
     def connector_route(self) -> tuple[int, PveConnectorRoute]:

@@ -434,6 +434,66 @@ unklaren Versand bleibt der Auftrag für den Readback vorgemerkt. Eine
 Schlüsselrotation lässt bereits erfasste Arbeit für denselben Agenten
 nachvollziehen.
 
+### Verantwortung für Gast und Sicherungszeitplan übergeben (FL03.2)
+
+Der Übergang gilt für eine registrierte Gastgeneration und einen bereits
+aktiven nativen PVE-Sicherungszeitplan auf einem Standalone-Knoten. Der
+Zeitplan muss den Knoten und genau diesen Gast explizit auswählen. Die
+lesende Übernahme zeigt seine `job_ref` und einen unterstützten Kalender.
+Der Zeitplan läuft auf beiden Seiten des Übergangs über denselben
+`pvescheduler`-Eintrag mit derselben Sicherungskonfiguration.
+
+Die auf dem Ziel angewandte FL02-Revision muss den übergebenden Principal
+als `operator` und das Sicherungsprofil in `backup_profile_refs` führen.
+Das lokale Sicherheitslimit muss beide erlauben. Die Koordinator-CLI
+verwendet den Principal `local-coordinator`. Auf dem Ziel bindet root
+das Profil an die native PVE-Auftrags-ID in
+`/var/lib/opstend-pve-executor/fleet-ownership.json`, Eigentümer
+`root:root`, Modus `0600`. Das JSON enthält `native_job_id` und
+`profile`. Der signierte native Executor verwendet die vorhandene
+Gastregistrierung, FL02-Zieldatenbank und mTLS-Bindung aus FL03.1.
+
+```sh
+# Auf dem Koordinator. Eine erstmalige Übergabe beginnt bei Epoche 0.
+opstend fleet ownership-request --db "$db" --target target.json \
+  --schedule-ref "$job_ref" --profile "$profile" --owner fleet --epoch 0 \
+  --idempotency-key "$request_id"
+opstend fleet ownership-status --db "$db" --transition-id "$transition"
+
+# Auf dem Ziel als root. ID und Digest stammen aus dem Koordinatorergebnis.
+opstend fleet ownership-target prepare --transition-id "$transition" --digest "$digest"
+# Im PVE-Backupmenü genau den gebundenen Eintrag deaktivieren.
+opstend fleet ownership-target confirm --transition-id "$transition" --digest "$digest"
+# Nach erfolgreichem confirm mit Koordinatorquittung denselben Eintrag aktivieren.
+opstend fleet ownership-target resume --transition-id "$transition" --digest "$digest"
+opstend fleet ownership-target status
+```
+
+`prepare` prüft die bestehende native Definition nach Abschluss oder
+geklärtem Readback bereits freigegebener Flottenbefehle. `confirm` prüft
+die deaktivierte Definition, die Ruhe des nativen Schedulers und aktive
+oder ungeklärte Arbeiten. Bei ausstehender Bestätigung denselben Befehl
+erneut ausführen. `committed` bestätigt den Eigentümer und die neue
+Epoche. `resume` gibt neue Gastbefehle nach geprüftem Readback des
+wieder aktiven Eintrags frei. Der Auditverlauf und beide Statussichten
+korrelieren über Übergabe-ID, Zeitplanreferenz und Epoche.
+
+Für den Rückweg die aktuelle lesende Übernahme und angewandte Policy
+prüfen und `ownership-request` mit `--owner standalone`, der angezeigten
+Epoche und einem frischen Idempotenzschlüssel ausführen. Danach folgen
+dieselben lokalen Schritte. Die lokale Statusabfrage funktioniert bei
+unterbrochener Verbindung. Der zuletzt bestätigte Eigentümer und eine
+bereits gesetzte Pause bleiben über Verbindungs- und Prozessunterbrechungen
+erhalten. Ändert sich die gebundene Richtlinienrevision oder Enrollment-
+Generation vor `confirm`, hält der Executor die Pause. Für einen Abbruch
+vor dem bestätigten Eigentümerwechsel aktiviert root denselben Eintrag
+für den bisherigen Verantwortlichen und führt
+`ownership-target cancel --transition-id "$transition" --digest "$digest"`
+aus. Der bestätigte Abbruch behält Eigentümer und Epoche bei. Danach kann
+der Operator eine Übergabe unter der neuen Richtlinie anfordern. Hat das
+Ziel den Eigentümer bereits festgeschrieben, liefert ein erneutes
+`confirm` die Quittung und `resume` schließt die Übergabe ab.
+
 ## Sequenz für koordinierte Gastaktionen
 
 1. Der Operator erhält Inventar und tatsächliche Capability für genau den

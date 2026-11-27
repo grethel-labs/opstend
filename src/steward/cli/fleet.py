@@ -20,6 +20,7 @@ from ..core.fleet_connector import collect_pve_adoption, collect_pve_inventory, 
 from ..core.fleet_enrollment import FleetCapability, FleetEnrollment
 from ..core.fleet_identity import FleetIdentityRegistry
 from ..core.fleet_native_profile import export_pve_profile
+from ..core.fleet_ownership_coordinator import FleetOwnershipConflict
 from ..core.fleet_policy import FleetPolicy, FleetPolicyConflict, FleetPolicyRevision, FleetTarget
 from ..core.fleet_policy_apply import (
     FleetPolicyActor,
@@ -28,7 +29,7 @@ from ..core.fleet_policy_apply import (
     FleetPolicyNotFound,
 )
 from ..fleet_transport import FleetClient, certificate_fingerprint, create_server
-from . import fleet_policy_target, fleet_power
+from . import fleet_ownership, fleet_policy_target, fleet_power
 
 _CAPABILITIES = get_args(FleetCapability)
 _INVITE_PATTERN = re.compile(rb"[A-Za-z0-9_-]{32,128}\n?")
@@ -258,10 +259,17 @@ def _run(args: argparse.Namespace) -> int:
             return fleet_power.sync_target()
         elif args.fleet_command.startswith("command-"):
             fleet_power.run(args, _registry(args.db), _policy_input)
+        elif args.fleet_command == "ownership-target":
+            return fleet_ownership.target(args)
+        elif args.fleet_command.startswith("ownership-"):
+            fleet_ownership.run(args, _registry(args.db), _policy_input)
         elif args.fleet_command.startswith("policy-"):
             _policy_operator(args)
         else:
             _operator(args)
+    except FleetOwnershipConflict as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     except FleetPolicyConflict as exc:
         print(
             json.dumps({"head": exc.head, "message": "fleet policy has changed"}), file=sys.stderr
@@ -375,6 +383,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     coordinator.add_argument("--revoke", action="store_true")
     fleet_policy_target.register(commands, client_tls)
     fleet_power.register(commands, operator)
+    fleet_ownership.register(commands, operator)
     serve = operator("serve", "serve the private mTLS fleet endpoints")
     serve.add_argument("--bind", default="127.0.0.1", help="explicit private numeric bind address")
     serve.add_argument("--port", type=int, default=8443)

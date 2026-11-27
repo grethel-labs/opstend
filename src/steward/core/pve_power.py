@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import stat
+from collections.abc import Callable
 from contextlib import closing, contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ from steward import __version__
 from .pve_inventory_models import MAX_RESOURCES, GuestKind, NodeName, Projection, Vmid
 
 if TYPE_CHECKING:
+    from .fleet_ownership import NativeOwnershipRecord
     from .pve_provision import ProvisionJob
 
 
@@ -315,7 +317,7 @@ class PowerJournal:
                 """
             )
             connection.execute("PRAGMA user_version = 1")
-        elif version != 1:
+        elif version not in (1, 2):
             raise PowerJournalError("journal_unavailable")
 
     def get(self, job_id: str) -> JobRecord | None:
@@ -343,7 +345,7 @@ class PowerJournal:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             if version == 0:
                 return None
-            if version != 1:
+            if version not in (1, 2):
                 raise PowerJournalError("journal_unavailable")
             return self._get(connection, job_id)
 
@@ -400,6 +402,9 @@ class PowerJournal:
                 ).fetchone()
                 if claim != (record.job_id, index):
                     raise PowerJournalError("task_conflict")
+        self._sync_directory()
+
+    def _sync_directory(self) -> None:
         # Sync the directory even if another writer created the file before this transaction.
         try:
             fd = os.open(self._directory, os.O_RDONLY | os.O_DIRECTORY)
@@ -409,6 +414,120 @@ class PowerJournal:
                 os.close(fd)
         except OSError:
             raise PowerJournalError("journal_unavailable") from None
+
+    @staticmethod
+    def _ownership(connection: sqlite3.Connection) -> NativeOwnershipRecord:
+        from .fleet_ownership import NativeOwnershipRecord
+
+        row = connection.execute(
+            "SELECT record FROM writer_ownership WHERE singleton = 1"
+        ).fetchone()
+        if row is None:
+            raise PowerJournalError("journal_unavailable")
+        return NativeOwnershipRecord.model_validate_json(row[0])
+
+    def ownership(self) -> NativeOwnershipRecord | None:
+        try:
+            self._database.lstat()
+        except FileNotFoundError:
+            return None
+        except OSError:
+            raise PowerJournalError("journal_unavailable") from None
+        with self._connect(create=False) as connection:
+            connection.execute("BEGIN")
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version in (0, 1):
+                return None
+            if version != 2:
+                raise PowerJournalError("journal_unavailable")
+            return self._ownership(connection)
+
+    def write_ownership(
+        self,
+        record: NativeOwnershipRecord,
+        *,
+        previous: NativeOwnershipRecord | None,
+        now: datetime,
+        admit: Callable[[], None] | None = None,
+    ) -> None:
+        from .fleet_ownership import NativeOwnershipRecord
+
+        record = NativeOwnershipRecord.model_validate_json(record.model_dump_json())
+        with self._connect(create=True) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._initialize(connection)
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            current = self._ownership(connection) if version == 2 else None
+            if current != previous:
+                raise PowerJournalError("journal_conflict")
+            cancel_new = record.state == "canceled" and (
+                previous is None or previous.plan != record.plan
+            )
+            if record.state == "pausing" or cancel_new:
+                if previous is not None and previous.state not in {"active", "canceled"}:
+                    raise PowerJournalError("journal_conflict")
+                if record.state == "pausing":
+                    self._retire_prepared(connection, record.plan.scope.vmid, now)
+            else:
+                before = "committed" if record.state == "active" else "pausing"
+                if (
+                    previous is None
+                    or previous.state != before
+                    or previous.plan != record.plan
+                    or previous.schedule_fingerprint != record.schedule_fingerprint
+                ):
+                    raise PowerJournalError("journal_conflict")
+                if (
+                    record.state == "committed"
+                    and connection.execute(
+                        "SELECT 1 FROM jobs WHERE fence_vmid = ?", (record.plan.scope.vmid,)
+                    ).fetchone()
+                ):
+                    raise PowerJournalError("target_busy")
+            if version == 1:
+                connection.execute(
+                    """
+                    CREATE TABLE writer_ownership (
+                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                        record TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.execute("PRAGMA user_version = 2")
+            if admit is not None:
+                admit()
+            connection.execute(
+                "INSERT OR REPLACE INTO writer_ownership VALUES (1, ?)",
+                (record.model_dump_json(),),
+            )
+        self._sync_directory()
+
+    @staticmethod
+    def _retire_prepared(connection: sqlite3.Connection, vmid: int, now: datetime) -> None:
+        # Leave native task claims and in-flight fences available for reconciliation.
+        rows = connection.execute(
+            """
+            SELECT record FROM jobs WHERE fence_vmid IS NULL
+                AND json_extract(record, '$.target.vmid') = ?
+                AND json_extract(record, '$.state') = 'prepared'
+                AND json_extract(record, '$.operation') IN ('start', 'shutdown', 'reboot')
+            """,
+            (vmid,),
+        ).fetchall()
+        for (raw,) in rows:
+            job = JobRecord.model_validate_json(raw)
+            retired = job.model_copy(
+                update={
+                    "state": "failed",
+                    "next_action": None,
+                    "error_code": "ownership_changed",
+                    "updated_at": max(now, job.updated_at),
+                }
+            )
+            connection.execute(
+                "UPDATE jobs SET record = ? WHERE job_id = ?",
+                (retired.model_dump_json(), job.job_id),
+            )
 
     @staticmethod
     def _validate_update(

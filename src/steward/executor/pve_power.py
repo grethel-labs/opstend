@@ -7,6 +7,7 @@ import json
 import os
 import socket
 import stat
+import subprocess
 import sys
 import uuid
 from collections.abc import Callable
@@ -21,6 +22,7 @@ from steward.core import pve_native as native
 from steward.core import pve_native_install as install
 from steward.core.audit import AuditLog
 from steward.core.canonical import canonical_json
+from steward.core.fleet_native_profile import _local_binding
 from steward.core.pve_inventory_models import Projection, Vmid
 from steward.core.pve_power import (
     GuestState,
@@ -106,6 +108,7 @@ class PowerExecutor:
         pending_check: Callable[[GuestTarget], None],
         state_check: Callable[[GuestTarget, GuestState], None],
         now: Callable[[], datetime] = _now,
+        local_binding: Callable[[], tuple[str, str]] = _local_binding,
     ):
         self.journal = journal
         self.audit = audit
@@ -115,6 +118,7 @@ class PowerExecutor:
         self.pending_check = pending_check
         self.state_check = state_check
         self.now = now
+        self.local_binding = local_binding
 
     def _get(self, job_id: JobId) -> JobRecord:
         job = self.journal.get(job_id)
@@ -154,6 +158,32 @@ class PowerExecutor:
         self.pending_check(target)
         return observed
 
+    def _check_owner(
+        self,
+        target: GuestTarget,
+        authority: _Authority,
+        operation: PowerOperation,
+        fleet_origin: str | None,
+    ) -> None:
+        ownership = self.journal.ownership()
+        if ownership is None or ownership.plan.scope.vmid != target.vmid:
+            return
+        scope = ownership.plan.scope
+        guest = self._guest(authority, target, operation)
+        if (
+            ownership.state not in {"active", "canceled"}
+            or ownership.owner != ("fleet" if fleet_origin is not None else "standalone")
+            or (target.node, target.kind) != (scope.node, scope.kind)
+            or (guest.pve_uid, guest.registered_at_ms) != (scope.pve_uid, scope.registered_at_ms)
+        ):
+            raise ExecutorError("policy_denied", "Native power is fenced by writer ownership.")
+        try:
+            verified = self.local_binding() == (scope.node, scope.instance_binding)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            verified = False
+        if not verified:
+            raise ExecutorError("policy_denied", "The managed native instance binding changed.")
+
     def plan(self, params: _PlanParams) -> JobRecord:
         authority = self.authority()
         guest = authority.policy.guest(params.vmid)
@@ -173,6 +203,7 @@ class PowerExecutor:
         deadline: datetime | None = None,
     ) -> JobRecord:
         self._guest(authority, target, operation)
+        self._check_owner(target, authority, operation, fleet_origin)
         authority.api.validate_permissions(authority.policy)
         observed = self._observe(authority, target, operation)
         required = "stopped" if operation == "start" else "running"
@@ -249,6 +280,10 @@ class PowerExecutor:
         if authority.policy.revision != job.policy_revision or authority.binding != job.binding:
             return self._fail(job, "policy_changed")
         self._guest(authority, job.target, job.operation)
+        try:
+            self._check_owner(job.target, authority, job.operation, fleet_origin)
+        except ExecutorError:
+            return self._fail(job, "ownership_changed")
         authority.api.validate_permissions(authority.policy)
         operation = "start" if job.operation == "start" or job.legs else "shutdown"
         baseline_since = int(self.now().timestamp())

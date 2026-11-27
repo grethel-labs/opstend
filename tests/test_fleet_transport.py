@@ -14,8 +14,15 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from steward.cli import fleet as fleet_cli
 from steward.cli import main as cli
+from steward.core.fleet_adoption_models import (
+    PveAdoptionEvidence,
+    PveBackupSchedule,
+    pve_backup_job_ref,
+)
 from steward.core.fleet_enrollment import FleetEnrollment, FleetEnrollmentConflict
 from steward.core.fleet_identity import FleetIdentityRegistry
+from steward.core.fleet_ownership import OwnershipExchange, OwnershipReceipt
+from steward.core.fleet_ownership_coordinator import FleetOwnershipCoordinator
 from steward.core.fleet_policy import (
     FleetPolicy,
     FleetPolicyValues,
@@ -653,7 +660,7 @@ def test_mtls_policy_converges_independent_targets_and_recovers_lost_ack(
         assert first_store.state().applied_revision == latest.id
 
 
-def _power_setup(tmp_path, now):
+def _power_setup(tmp_path, now, *, backup_profile_refs=()):
     tmp_path.chmod(0o700)
     registry = FleetIdentityRegistry(tmp_path / "fleet.sqlite")
     site = registry.register_site("power-site")
@@ -696,10 +703,11 @@ def _power_setup(tmp_path, now):
     observer = FleetPolicyActor("observer")
     service = FleetPolicyApply(registry, clock=lambda: now)
     limits = FleetPolicyValues(
+        backup_profile_refs=backup_profile_refs,
         role_assignments=(
             RoleAssignment(subject=operator.subject, role="operator"),
             RoleAssignment(subject=observer.subject, role="observer"),
-        )
+        ),
     )
     body = FleetPolicy(
         defaults=limits,
@@ -755,6 +763,84 @@ def _power_report(poll, work, state, **fields):
         **fields,
     )
     return poll.model_copy(update={"report": report})
+
+
+def test_mtls_handoff_uses_only_the_exact_power_target_grant(tmp_path, tls):
+    now = datetime.now(UTC)
+    registry, _, actor, _, _, ((agent, poll), (other_agent, other_poll)) = _power_setup(
+        tmp_path, now, backup_profile_refs=("daily",)
+    )
+    enrollment = FleetEnrollment(registry)
+    ownership = FleetOwnershipCoordinator(registry)
+    host = registry.get_agent(agent).host_id
+    with registry._connection() as db:
+        route_id = db.execute("SELECT id FROM fleet_routes WHERE host_id = ?", (host,)).fetchone()[
+            "id"
+        ]
+    route = registry.get_connector_route(route_id)
+    connector = registry.register_agent(host, "handoff-inventory")
+    schedule_ref = pve_backup_job_ref(route.instance_binding, "existing-job")
+    with loopback(enrollment, tls) as client:
+        target, target_key = client("first")
+        other, other_key = client("wrong")
+        reader, reader_key = client("reader")
+        target.enroll(_power_enroll(enrollment, agent, target_key, poll.target))
+        other.enroll(_power_enroll(enrollment, other_agent, other_key, other_poll.target))
+        invitation = enrollment.issue(
+            connector.id, key_fingerprint=reader_key, capability="pve_inventory", route_id=route_id
+        )
+        reader.enroll(invitation.token.get_secret_value())
+        enrollment.adopt_pve(
+            instance_id=route.instance_id,
+            route_id=route_id,
+            agent_id=connector.id,
+            expected_generation=1,
+            instance_binding=route.instance_binding,
+        )
+        generation, _, attempt = reader.begin_adoption()
+        observed_at = datetime.now(UTC)
+        reader.publish_adoption(
+            generation,
+            attempt,
+            sample_snapshot(
+                api_name=route.api_name,
+                node=route.node,
+                observed_at=observed_at,
+                uid="abcde23456abcde23456",
+                registration_ms=1234567890000,
+            ),
+            PveAdoptionEvidence(
+                observed_at=observed_at,
+                node=route.node,
+                pve_version="9.3.0",
+                audit_privileges=("VM.Audit",),
+                schedule_state="observed",
+                schedules=(
+                    PveBackupSchedule(
+                        job_ref=schedule_ref, schedule="03:30", enabled=True, vmids=(190,)
+                    ),
+                ),
+            ),
+        )
+        handoff = ownership.request(actor, poll.target, schedule_ref, "daily", "fleet", "take", 0)
+        request = OwnershipExchange(
+            target=poll.target, transition_id=handoff.transition_id, digest=handoff.digest
+        )
+        for connection in (reader, other):
+            with pytest.raises(FleetTransportError):
+                connection.exchange_ownership(request)
+        with pytest.raises(FleetTransportError):
+            target.exchange_ownership(request.model_copy(update={"target": other_poll.target}))
+        claim = target.exchange_ownership(request)
+        assert claim.claim is not None
+        assert claim.plan.digest == handoff.digest
+        receipt = OwnershipReceipt(state="committed", epoch=1, schedule_fingerprint="d4" * 32)
+        committed = target.exchange_ownership(request.model_copy(update={"receipt": receipt}))
+        assert (committed.status.owner, committed.status.state) == ("fleet", "committed")
+        ready = target.exchange_ownership(
+            request.model_copy(update={"receipt": receipt.model_copy(update={"state": "active"})})
+        )
+        assert (ready.status.owner, ready.status.state) == ("fleet", "active")
 
 
 def test_mtls_power_is_scoped_and_other_instance_runs_while_first_is_offline(tmp_path, tls):

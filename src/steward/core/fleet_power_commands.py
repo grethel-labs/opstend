@@ -117,6 +117,8 @@ def _power_context(
     actor: FleetPolicyActor,
     target: FleetTarget,
     now: datetime,
+    *,
+    backup_profile: str | None = None,
 ) -> tuple[sqlite3.Row, str, str, str] | None:
     if target.kind != "pve_guest" or access.record is None:
         return None
@@ -148,6 +150,10 @@ def _power_context(
         or reviewed.local_revision != local.revision
         or effective != reviewed.effective
         or effective.status != "ready"
+        or (
+            backup_profile is not None
+            and backup_profile not in effective.values.backup_profile_refs
+        )
         or not any(
             item.subject == actor.subject and item.role == "operator"
             for item in effective.values.role_assignments
@@ -155,7 +161,7 @@ def _power_context(
     ):
         return None
     guest = db.execute(
-        """SELECT g.kind, g.node, g.vmid, g.name, g.pve_uid, g.registered_at_ms,
+        """SELECT g.kind, g.node, g.vmid, g.name, g.pve_uid, g.registered_at_ms, g.observation_id,
                   i.id AS instance_id, i.binding AS instance_binding,
                   b.agent_id, b.grant_generation, a.host_id, p.route_id, o.observed_at
            FROM fleet_guests AS g JOIN fleet_instances AS i ON i.id = g.instance_id
@@ -178,7 +184,22 @@ def _power_context(
         <= _MAX_INVENTORY_AGE
     ):
         return None
+    if backup_profile is None and not _power_owned(db, guest, target):
+        return None
     return guest, applied, approval, local.revision
+
+
+def _power_owned(db: sqlite3.Connection, guest: sqlite3.Row, target: FleetTarget) -> bool:
+    row = db.execute(
+        """SELECT owner, state, target_id, generation FROM fleet_guest_ownership
+           WHERE instance_id = ? AND vmid = ?""",
+        (guest["instance_id"], guest["vmid"]),
+    ).fetchone()
+    return row is None or (
+        (row["owner"], row["target_id"], row["generation"])
+        == ("fleet", target.id, target.generation)
+        and row["state"] in ("active", "canceled")
+    )
 
 
 def _scope(guest: sqlite3.Row) -> PowerScope:

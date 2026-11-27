@@ -185,6 +185,25 @@ CREATE INDEX IF NOT EXISTS fleet_power_command_target
     ON fleet_power_commands(target_id, generation);
 CREATE INDEX IF NOT EXISTS fleet_power_command_subject
     ON fleet_power_commands(subject, source);
+CREATE TABLE IF NOT EXISTS fleet_ownership_plans (
+    id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, plan TEXT NOT NULL,
+    subject TEXT NOT NULL, source TEXT NOT NULL, coordinator INTEGER NOT NULL,
+    request_key TEXT NOT NULL, UNIQUE (subject, source, request_key)
+);
+CREATE TABLE IF NOT EXISTS fleet_guest_ownership (
+    instance_id TEXT NOT NULL, vmid INTEGER NOT NULL, target_id TEXT NOT NULL,
+    generation INTEGER NOT NULL, job_ref TEXT NOT NULL,
+    owner TEXT NOT NULL, epoch INTEGER NOT NULL, state TEXT NOT NULL,
+    handoff_id TEXT NOT NULL REFERENCES fleet_ownership_plans(id),
+    PRIMARY KEY (instance_id, vmid)
+);
+CREATE TABLE IF NOT EXISTS fleet_ownership_history (
+    id INTEGER PRIMARY KEY, handoff_id TEXT NOT NULL REFERENCES fleet_ownership_plans(id),
+    state TEXT NOT NULL, owner TEXT NOT NULL, epoch INTEGER NOT NULL,
+    occurred_at TEXT NOT NULL, evidence TEXT
+);
+CREATE INDEX IF NOT EXISTS fleet_ownership_history_plan
+    ON fleet_ownership_history(handoff_id, id);
 CREATE TABLE IF NOT EXISTS fleet_observations (
     id TEXT PRIMARY KEY, instance_id TEXT NOT NULL REFERENCES fleet_instances(id),
     route_id TEXT NOT NULL REFERENCES fleet_routes(id), observed_at TEXT NOT NULL,

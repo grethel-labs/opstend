@@ -14,11 +14,13 @@ from typing import TYPE_CHECKING, cast
 from pydantic import TypeAdapter, ValidationError
 
 from steward.core.fleet_adoption_models import (
+    NATIVE_BACKUP_JOB_PATTERN,
     AuditPrivilege,
     Calendar,
     PveAdoptionEvidence,
     PveBackupSchedule,
     ScheduleState,
+    pve_backup_job_ref,
 )
 from steward.core.pve_inventory import (
     _MAX_REQUESTS,
@@ -47,7 +49,7 @@ _STATUS = "/api2/json/cluster/status"
 _BACKUP = "/api2/json/cluster/backup"
 _NATIVE_ID = re.compile(r"[a-z2-7]{20}")
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}")
-_BACKUP_JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+_BACKUP_JOB_ID = re.compile(NATIVE_BACKUP_JOB_PATTERN)
 _VMID = re.compile(r"[1-9][0-9]{2,8}")
 _CALENDAR = TypeAdapter(Calendar)
 _Address = ipaddress.IPv4Address | ipaddress.IPv6Address
@@ -273,9 +275,11 @@ def _project_backup_jobs(
             calendar = _CALENDAR.validate_python(row.get("schedule"), strict=True)
         except ValidationError:
             calendar = None
-        ref = sha256(f"pve-backup-job:v1:{route.instance_binding}:{job_id}".encode("ascii"))
         jobs[job_id] = PveBackupSchedule(
-            job_ref=ref.hexdigest(), schedule=calendar, enabled=bool(enabled), vmids=vmids
+            job_ref=pve_backup_job_ref(route.instance_binding, job_id),
+            schedule=calendar,
+            enabled=bool(enabled),
+            vmids=vmids,
         )
     return tuple(
         sorted(
