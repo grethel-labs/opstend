@@ -305,6 +305,34 @@ def _resolve(
     )
 
 
+def _commit(db: sqlite3.Connection, policy: FleetPolicy, parent: str | None) -> FleetPolicyRevision:
+    head = _head(db)
+    if parent != head:
+        raise FleetPolicyConflict(head)
+
+    # Revalidate caller-supplied models and hash exactly the normalized stored body.
+    policy = FleetPolicy.model_validate_json(policy.model_dump_json(exclude_unset=True))
+    body = policy.model_dump(mode="json", exclude_unset=True)
+    for site in policy.sites:
+        if db.execute("SELECT 1 FROM fleet_sites WHERE id = ?", (site,)).fetchone() is None:
+            raise ValueError("policy references an unknown site")
+    for item in policy.targets:
+        if _target_record(db, item.target) is None:
+            raise ValueError("policy references an unknown target generation")
+
+    revision = revision_id({"parent": parent, "policy": body})
+    db.execute(
+        "INSERT INTO fleet_policy_revisions (id, parent, body) VALUES (?, ?, ?)",
+        (revision, parent, canonical_json(body)),
+    )
+    db.execute(
+        """INSERT INTO fleet_policy_head (singleton, revision) VALUES (1, ?)
+           ON CONFLICT(singleton) DO UPDATE SET revision = excluded.revision""",
+        (revision,),
+    )
+    return FleetPolicyRevision(id=revision, parent=parent, policy=policy)
+
+
 class FleetPolicyStore:
     """Store immutable fleet policy revisions in the coordinator's registry."""
 
@@ -321,31 +349,7 @@ class FleetPolicyStore:
 
     def commit(self, policy: FleetPolicy, *, parent: str | None) -> FleetPolicyRevision:
         with self._registry._write() as db:
-            head = _head(db)
-            if parent != head:
-                raise FleetPolicyConflict(head)
-
-            # Revalidate caller-supplied models and hash exactly the normalized stored body.
-            policy = FleetPolicy.model_validate_json(policy.model_dump_json(exclude_unset=True))
-            body = policy.model_dump(mode="json", exclude_unset=True)
-            for site in policy.sites:
-                if db.execute("SELECT 1 FROM fleet_sites WHERE id = ?", (site,)).fetchone() is None:
-                    raise ValueError("policy references an unknown site")
-            for item in policy.targets:
-                if _target_record(db, item.target) is None:
-                    raise ValueError("policy references an unknown target generation")
-
-            revision = revision_id({"parent": parent, "policy": body})
-            db.execute(
-                "INSERT INTO fleet_policy_revisions (id, parent, body) VALUES (?, ?, ?)",
-                (revision, parent, canonical_json(body)),
-            )
-            db.execute(
-                """INSERT INTO fleet_policy_head (singleton, revision) VALUES (1, ?)
-                   ON CONFLICT(singleton) DO UPDATE SET revision = excluded.revision""",
-                (revision,),
-            )
-            return FleetPolicyRevision(id=revision, parent=parent, policy=policy)
+            return _commit(db, policy, parent)
 
     def effective(
         self,

@@ -192,6 +192,35 @@ CREATE TABLE IF NOT EXISTS fleet_policy_head (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     revision TEXT NOT NULL REFERENCES fleet_policy_revisions(id)
 );
+CREATE TABLE IF NOT EXISTS fleet_policy_grants (
+    subject TEXT NOT NULL, permission TEXT NOT NULL CHECK (permission IN ('read', 'write')),
+    scope TEXT NOT NULL CHECK (scope IN ('site', 'group', 'host', 'pve_instance', 'pve_guest')),
+    scope_id TEXT NOT NULL, generation INTEGER NOT NULL,
+    PRIMARY KEY (subject, permission, scope, scope_id, generation)
+);
+CREATE TABLE IF NOT EXISTS fleet_policy_reports (
+    kind TEXT NOT NULL, target_id TEXT NOT NULL, generation INTEGER NOT NULL,
+    local TEXT NOT NULL, applied_revision TEXT REFERENCES fleet_policy_revisions(id),
+    PRIMARY KEY (kind, target_id, generation)
+);
+CREATE TABLE IF NOT EXISTS fleet_policy_coordinators (subject TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS fleet_policy_plans (
+    digest TEXT PRIMARY KEY, revision TEXT NOT NULL REFERENCES fleet_policy_revisions(id),
+    body TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS fleet_policy_approvals (
+    id TEXT PRIMARY KEY, digest TEXT NOT NULL REFERENCES fleet_policy_plans(digest),
+    subject TEXT NOT NULL, coordinator INTEGER NOT NULL CHECK (coordinator IN (0, 1)),
+    actor_source TEXT NOT NULL CHECK (actor_source IN ('local', 'browser')),
+    request_key TEXT NOT NULL, UNIQUE (actor_source, subject, request_key)
+);
+CREATE TABLE IF NOT EXISTS fleet_policy_outcomes (
+    approval_id TEXT NOT NULL REFERENCES fleet_policy_approvals(id),
+    kind TEXT NOT NULL, target_id TEXT NOT NULL, generation INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'applied', 'rejected')),
+    reason TEXT,
+    PRIMARY KEY (approval_id, kind, target_id, generation)
+);
 CREATE TABLE IF NOT EXISTS fleet_pending_guests (
     guest_id TEXT PRIMARY KEY REFERENCES fleet_guests(id),
     observation_id TEXT NOT NULL REFERENCES fleet_observations(id),

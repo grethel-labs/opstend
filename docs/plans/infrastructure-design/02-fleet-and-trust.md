@@ -283,6 +283,58 @@ frischen Schlüssel ausführen, erneut enrollen und `adopt-pve` mit der neuen
 Grant-Generation wiederholen. Eine frische Erhebung liefert die aktuelle Sicht
 unter denselben Ressourcen- und Referenz-IDs.
 
+### Richtlinienrevisionen freigeben (FL02.2)
+
+Die CLI und die Webapp zeigen dieselbe kanonische Vorschau mit exakten
+Zielgenerationen, vorherigem Flottenstand, lokaler Sicherheitsrevision und
+Gültigkeitsdauer. `policy-approve` bindet die Prüfung an den Plan-Digest.
+Ein zwischenzeitlich geänderter Kopf erfordert eine neue Vorschau.
+Die Freigabe erzeugt ein Ergebnis je Ziel. Ohne bestätigte lokale Übernahme
+bleibt das Ergebnis ausstehend. `policy-rollback` legt eine neue gewünschte
+Revision an, die erneut geprüft und freigegeben wird.
+
+Der Koordinator vergibt mit `policy-grant` die Leseberechtigung `read` oder
+die Freigabeberechtigung `write` für genau eine Site, Gruppe oder
+Ressourcengeneration. Freigaben erfordern Schreibzugriff auf alle geplanten
+Ziele. Für das Speichern und Exportieren vollständiger Revisionen sowie
+Rollback ist Koordinatorberechtigung erforderlich. Diese Berechtigungen
+sind unabhängig von den Rollenwerten einer geplanten Richtlinie.
+
+Für die Webapp startet der Betreiber den Admin-API-Prozess für den
+Koordinator mit `STEWARD_FLEET_POLICY_DB`, `STEWARD_FLEET_POLICY_SUBJECT`,
+einem eigenen `STEWARD_STATE_DIR`, dem Admin-Token per Dateireferenz und
+dem zugelassenen TLS-Ursprung. Der lokale Datenbankeigentümer vergibt
+die Koordinatorrolle mit `policy-coordinator --subject` und widerruft
+sie mit `--revoke`. Die Zielübernahme prüft den aktuellen Rollenstand.
+Der Prozess liefert im
+Flottenmodus die Webapp, Sitzung und `/api/fleet/policy`. Die Vorschau
+entsteht über `POST /api/fleet/policy/preview`, die Freigabe über
+`POST /api/fleet/policy/approve` mit `Idempotency-Key`. Die Ergebnisansicht
+liest `GET /api/fleet/policy/approvals/{id}`.
+
+FL02.2 bietet eine lokale Übernahme für ein Ziel auf demselben Rechner wie
+der Koordinator. Beide Datenbanken müssen getrennte private Dateien auf
+demselben Dateisystem sein. Die Übernahme prüft den aktuellen Kopf und
+den freigegebenen Plan. Sie liest Sicherheitsgrenzen und angewandte
+Revision aus der Datenbank des Ziels. Erst nach gemeinsamem Commit sind
+Richtlinienstand und Ergebnis sichtbar. Die Metadaten ändern keine
+PVE-Konfiguration, Zeitpläne oder laufenden Aufgaben. Verteilung an
+getrennte Rechner und Wiederverbindung folgen in FL02.3 und FL03.
+
+`target-policy.json` enthält `target` und `limits`. `targets.json` enthält
+die ausgewählten Objekte mit `kind`, `id` und `generation`. Beide Dateien
+sind privat. Die folgenden Befehle laufen als Eigentümer der Datenbanken.
+
+```sh
+opstend fleet policy-target-configure --target-db "$target_db" --config target-policy.json
+opstend fleet policy-target-report --db "$db" --target-db "$target_db"
+opstend fleet policy-preview --db "$db" --revision "$revision" --targets targets.json
+opstend fleet policy-approve --db "$db" --digest "$digest" --idempotency-key "$request_id"
+opstend fleet policy-target-adopt --db "$db" --target-db "$target_db" \
+  --approval "$approval" --digest "$digest"
+opstend fleet policy-status --db "$db" --approval-id "$approval"
+```
+
 ## Sequenz für einen Gast-Neustart
 
 1. Der Operator erhält Inventar und tatsächliche Capability für genau den
