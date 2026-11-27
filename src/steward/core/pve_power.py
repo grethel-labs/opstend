@@ -11,13 +11,17 @@ import stat
 from contextlib import closing, contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Literal, Self
 
 from pydantic import AwareDatetime, Field, ValidationError, field_validator, model_validator
 
 from steward import __version__
 
 from .pve_inventory_models import MAX_RESOURCES, GuestKind, NodeName, Projection, Vmid
+
+if TYPE_CHECKING:
+    from .pve_provision import ProvisionJob
+
 
 PowerOperation = Literal["start", "shutdown", "reboot"]
 LegOperation = Literal["start", "shutdown"]
@@ -235,11 +239,14 @@ _PLAN_FIELDS = {
     "observation",
     "created_at",
     "expires_at",
+    "source",
+    "destination",
+    "name",
 }
 
 
 class PowerJournal:
-    """Store power intents and task claims in a pre-verified private state directory."""
+    """Store guest intents and task claims in a pre-verified private state directory."""
 
     def __init__(self, directory: Path) -> None:
         self._directory = Path(directory).absolute()
@@ -308,6 +315,16 @@ class PowerJournal:
             raise PowerJournalError("journal_unavailable")
 
     def get(self, job_id: str) -> JobRecord | None:
+        record = self._read(job_id)
+        return record if isinstance(record, JobRecord) else None
+
+    def get_provision(self, job_id: str) -> ProvisionJob | None:
+        from .pve_provision import ProvisionJob
+
+        record = self._read(job_id)
+        return record if isinstance(record, ProvisionJob) else None
+
+    def _read(self, job_id: str) -> JobRecord | ProvisionJob | None:
         if not isinstance(job_id, str) or re.fullmatch(_JOB_ID, job_id) is None:
             raise PowerJournalError("invalid_job_id")
         try:
@@ -327,17 +344,23 @@ class PowerJournal:
             return self._get(connection, job_id)
 
     @staticmethod
-    def _get(connection: sqlite3.Connection, job_id: str) -> JobRecord | None:
-        row = connection.execute("SELECT record FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
-        return JobRecord.model_validate_json(row[0]) if row is not None else None
+    def _get(connection: sqlite3.Connection, job_id: str) -> JobRecord | ProvisionJob | None:
+        from .pve_provision import JOURNAL_RECORD_ADAPTER
 
-    def write(self, record: JobRecord, *, previous: JobRecord | None) -> None:
+        row = connection.execute("SELECT record FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        return JOURNAL_RECORD_ADAPTER.validate_json(row[0]) if row is not None else None
+
+    def write(
+        self, record: JobRecord | ProvisionJob, *, previous: JobRecord | ProvisionJob | None
+    ) -> None:
+        from .pve_provision import JOURNAL_RECORD_ADAPTER
+
         with self._connect(create=True) as connection, connection:
             # The write lock covers both the comparison and the constraint checks.
             connection.execute("BEGIN IMMEDIATE")
             self._initialize(connection)
             record_json = record.model_dump_json()
-            record = JobRecord.model_validate_json(record_json)
+            record = JOURNAL_RECORD_ADAPTER.validate_json(record_json)
             if self._get(connection, record.job_id) != previous:
                 raise PowerJournalError("journal_conflict")
             if previous is not None:
@@ -378,7 +401,9 @@ class PowerJournal:
             raise PowerJournalError("journal_unavailable") from None
 
     @staticmethod
-    def _validate_update(record: JobRecord, previous: JobRecord) -> None:
+    def _validate_update(
+        record: JobRecord | ProvisionJob, previous: JobRecord | ProvisionJob
+    ) -> None:
         if (
             record.model_dump(include=_PLAN_FIELDS) != previous.model_dump(include=_PLAN_FIELDS)
             or len(record.legs) < len(previous.legs)

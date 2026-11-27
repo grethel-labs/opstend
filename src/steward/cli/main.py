@@ -1597,12 +1597,6 @@ def cmd_pve_native_inventory(args: argparse.Namespace) -> int:
 
 
 def cmd_pve_native_power(args: argparse.Namespace) -> int:
-    from ..core.pve_native_install import InstallError, _locked
-    from ..core.pve_power import _installed_power_runtime
-    from ..executor.protocol import ERROR_CLASSES, MAX_MESSAGE_BYTES, PROTOCOL_VERSION
-
-    if os.geteuid() != 0:
-        raise CliError("Native PVE power commands require local root.", EXIT_INVALID)
     command = args.power_command
     if command == "plan":
         params = {"vmid": args.vmid, "operation": args.operation}
@@ -1612,7 +1606,35 @@ def cmd_pve_native_power(args: argparse.Namespace) -> int:
         params = {"job_id": args.job_id}
         if command == "reconcile" and args.upid is not None:
             params["upid"] = args.upid
-    frame = json.dumps({"v": PROTOCOL_VERSION, "action": f"pve_power_{command}", "params": params})
+    return _run_native_pve_job("pve_power", command, params)
+
+
+def cmd_pve_native_provision(args: argparse.Namespace) -> int:
+    command = args.provision_command
+    if command == "plan":
+        params = {"template_vmid": args.template_vmid, "vmid": args.vmid, "name": args.name}
+    elif command == "execute":
+        params = {"job_id": args.confirm}
+    else:
+        params = {"job_id": args.job_id}
+        if command == "reconcile" and args.upid is not None:
+            params["upid"] = args.upid
+    return _run_native_pve_job("pve_provision", command, params)
+
+
+def _run_native_pve_job(family: str, command: str, params: dict) -> int:
+    from ..core.pve_native import _reject_api_constant, _unique_object
+    from ..core.pve_native_install import InstallError, _locked
+    from ..core.pve_power import _installed_power_runtime
+    from ..executor.protocol import ERROR_CLASSES, MAX_MESSAGE_BYTES, PROTOCOL_VERSION
+
+    module = {
+        "pve_power": "steward.executor.pve_power",
+        "pve_provision": "steward.executor.pve_provision",
+    }[family]
+    if os.geteuid() != 0:
+        raise CliError("Native PVE job commands require local root.", EXIT_INVALID)
+    frame = json.dumps({"v": PROTOCOL_VERSION, "action": f"{family}_{command}", "params": params})
     try:
         with _locked():
             _, _, python = _installed_power_runtime()
@@ -1622,7 +1644,7 @@ def cmd_pve_native_power(args: argparse.Namespace) -> int:
         ) from None
     try:
         response = subprocess.run(
-            [str(python), "-I", "-B", "-m", "steward.executor.pve_power"],
+            [str(python), "-I", "-B", "-m", module],
             input=frame.encode(),
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -1633,16 +1655,23 @@ def cmd_pve_native_power(args: argparse.Namespace) -> int:
         )
         if response.returncode or len(response.stdout) > MAX_MESSAGE_BYTES:
             raise ValueError
-        reply = json.loads(response.stdout)
+        reply = json.loads(
+            response.stdout, object_pairs_hook=_unique_object, parse_constant=_reject_api_constant
+        )
         if not isinstance(reply, dict):
             raise ValueError
         if reply.keys() == {"ok", "result"} and reply["ok"] is True:
             result = reply["result"]
-            if not isinstance(result, dict) or result.get("schema_version") != 1:
+            if (
+                not isinstance(result, dict)
+                or type(result.get("schema_version")) is not int
+                or result["schema_version"] != 1
+            ):
                 raise ValueError
         elif (
             reply.keys() == {"ok", "error_class", "message"}
             and reply["ok"] is False
+            and isinstance(reply["error_class"], str)
             and reply["error_class"] in ERROR_CLASSES
             and isinstance(reply["message"], str)
         ):
@@ -1862,6 +1891,23 @@ def build_parser() -> argparse.ArgumentParser:
     power_reconcile.add_argument("--job-id", required=True)
     power_reconcile.add_argument("--upid", help="bind an exact native task after a lost reply")
     pve_power.set_defaults(func=cmd_pve_native_power)
+
+    pve_provision = pve_sub.add_parser("provision", help="plan and confirm a scoped native clone")
+    provision_sub = pve_provision.add_subparsers(dest="provision_command", required=True)
+    provision_plan = provision_sub.add_parser("plan", help="observe a template and plan a clone")
+    provision_plan.add_argument("--template-vmid", type=int, required=True)
+    provision_plan.add_argument("--vmid", type=int, required=True)
+    provision_plan.add_argument("--name", required=True)
+    provision_execute = provision_sub.add_parser("execute", help="confirm the reviewed clone job")
+    provision_execute.add_argument("--confirm", metavar="JOB_ID", required=True)
+    provision_status = provision_sub.add_parser("status", help="read the durable clone job")
+    provision_status.add_argument("--job-id", required=True)
+    provision_reconcile = provision_sub.add_parser("reconcile", help="verify the task and clone")
+    provision_reconcile.add_argument("--job-id", required=True)
+    provision_reconcile.add_argument(
+        "--upid", help="bind the completed native task after a lost reply"
+    )
+    pve_provision.set_defaults(func=cmd_pve_native_provision)
 
     release = sub.add_parser("release", help="release tooling")
     release_sub = release.add_subparsers(dest="release_command", required=True)

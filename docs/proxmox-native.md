@@ -398,3 +398,120 @@ entry per bound native task with `operation` (`start` or `shutdown`),
 `succeeded`, or `failed`). The public object keeps native UPIDs and PVE
 principals private. The root-only CLI reports refused requests separately
 from job results.
+
+## Confirm a native full clone
+
+Native provisioning uses the signed root-only executor for a stopped,
+same-node full clone from a registered QEMU or unprivileged LXC template.
+Register each destination VMID with exactly one source VMID and an approved
+pool, storage, network profile, and resource limits. Use a dedicated non-root
+PVE user and privilege-separated token. Keep its credential in a root-owned
+regular file with mode `0400` or `0600`, with a separate file and PVE user
+from power, inventory, and health.
+
+Use a clean template configuration with no snapshots and ordinary
+PVE-managed QEMU disks or an unprivileged LXC root filesystem. The destination
+storage must be enabled and offer `images` for QEMU or `rootdir` for LXC.
+The inherited network must use an active conventional bridge with the exact
+registered VLAN and link state. The inherited CPU, memory, disk, and swap
+must fit the policy's explicit limits.
+
+Give the provisioning user and token only the following non-propagating
+effective ACLs. The executor checks the complete set against the policy.
+
+| Exact PVE ACL path | Privileges |
+| --- | --- |
+| `/vms/{template_vmid}` | `VM.Clone`, optionally `VM.Audit` |
+| `/vms/{destination_vmid}` | `VM.Allocate`, optionally `VM.Audit` |
+| `/storage/{storage}` | `Datastore.AllocateSpace`, optionally `Datastore.Audit` |
+| `/sdn/zones/localnetwork/{bridge}` | `SDN.Use` for an untagged bridge |
+| `/sdn/zones/localnetwork/{bridge}/{tag}` | `SDN.Use` for a tagged bridge |
+
+The executor reads local evidence as root to check pool, storage, resource and
+network eligibility. Use the pool only as an approved destination in the
+policy. The token's allocation grant is restricted to the exact destination
+VMID. Keep the token exclusive to the executor so its native tasks can be
+attributed during reconciliation.
+
+Place `provision.json` in `/var/lib/opstend-pve-executor`, with the directory
+owned by `root:root` at mode `0700` and the file owned by `root:root` at mode
+`0600`. Use the template's `uid` and millisecond `rtime` from the local
+resource roster described above, and its native configuration `digest` from
+`pvesh --noproxy get /nodes/pve/qemu/194/config --current 1 --output-format json`.
+Use the `lxc` API path for an LXC template. Review the template before
+registering its generation and digest. This example permits VMID 196 from
+QEMU template 194. To add an unprivileged LXC template 195, register its own
+generation and digest and a distinct destination such as VMID 197.
+
+```json
+{
+  "schema_version": 1,
+  "node": "pve",
+  "write_token_file": "/root/opstend-inputs/pve-provision-token",
+  "templates": [
+    {
+      "kind": "qemu",
+      "vmid": 194,
+      "pve_uid": "abcdefghijklmnopqrst",
+      "registered_at_ms": 1795737600000,
+      "config_digest": "0123456789abcdef0123456789abcdef01234567"
+    }
+  ],
+  "targets": [
+    {
+      "vmid": 196,
+      "template_vmid": 194,
+      "pool": "rc2-managed",
+      "storage": "local-lvm",
+      "networks": [{"index": 0, "bridge": "vmbr0", "link_down": true}],
+      "limits": {
+        "max_vcpus": 2,
+        "max_memory_mib": 1024,
+        "max_disk_bytes": 8589934592,
+        "max_swap_mib": 0
+      }
+    }
+  ]
+}
+```
+
+On the registered PVE host, review the plan before confirming its exact job
+ID within five minutes. The plan returns the source, target, name, pool,
+storage, `resources` observed on the template, `networks`, and `limits`.
+Use the same CLI entry point for all four operations.
+
+```sh
+/opt/opstend-pve/current/venv/bin/python -I -B -m steward.cli.main pve-native provision plan --template-vmid 194 --vmid 196 --name example-vm
+/opt/opstend-pve/current/venv/bin/python -I -B -m steward.cli.main pve-native provision execute --confirm JOB_ID
+/opt/opstend-pve/current/venv/bin/python -I -B -m steward.cli.main pve-native provision status --job-id JOB_ID
+/opt/opstend-pve/current/venv/bin/python -I -B -m steward.cli.main pve-native provision reconcile --job-id JOB_ID
+```
+
+Confirming the same job again returns its recorded state. The durable dispatch
+intent reserves the destination among local power and provision jobs. PVE
+decides whether the destination VMID is occupied at clone time. A confirmed
+collision returns `vmid_conflict`. Before sending the clone, the executor
+checks current permissions, policy, and source evidence again. Coordinate
+external changes to the template during dispatch because the PVE clone method
+cannot condition the write on the template digest.
+
+Use `status` to read the job and `reconcile` to verify a native task. A job
+succeeds after PVE archives task completion and local readback verifies a
+stopped guest with the expected name, pool, storage, network and resource
+profile. The executor correlates the guest registration time with task
+completion at the one-second granularity of the PVE task archive. Coordinate
+external changes to the target while the job is verifying. The result
+includes an opaque guest generation, and task references are also opaque.
+Unavailable completion evidence or a temporary readback error leaves the
+job `verifying` with an `error_code` and allows another reconciliation.
+
+After a lost reply, the job can become `uncertain` and keep its VMID reserved.
+Use `pve-native provision reconcile --job-id JOB_ID --upid UPID` with the
+completed native task from PVE. The executor requires a unique new task
+relative to the pre-dispatch baseline, with a recorded worker start within
+30 seconds of the dispatch second. It verifies the exact template and
+destination in the completed PVE log before binding the task. Unproven tasks and
+potential partial clones keep the destination reserved for operator
+investigation. The executor issues one clone POST per confirmed job and has
+no guest cleanup action. The existing executor-directory `kill-switch`
+also stops provisioning dispatches.

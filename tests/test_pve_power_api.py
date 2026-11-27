@@ -222,7 +222,6 @@ def test_local_pending_requires_root_and_exact_node_and_detects_hidden_change(mo
     ("observed", "expected", "error"),
     [
         (b"RUNNING\n", "running", None),
-        (b"STOPPED\n", "stopped", None),
         (b"FROZEN\n", "running", "policy_denied"),
         (b"STOPPED\n", "running", "policy_denied"),
         (b"RUNNING\nFROZEN\n", "running", "unavailable"),
@@ -248,6 +247,15 @@ def test_local_lxc_state_requires_exact_native_state(monkeypatch, observed, expe
     [(argv, options)] = calls
     assert argv == ["/usr/bin/lxc-info", "-n", "190", "-sH"]
     assert options["max_bytes"] == 64
+
+
+def test_stopped_lxc_does_not_require_a_runtime_record(monkeypatch):
+    def unexpected(*args, **kwargs):
+        pytest.fail("A configured but never-started container can lack a runtime record")
+
+    monkeypatch.setattr(pve_power_api, "run_bounded", unexpected)
+    target = GuestTarget(node=NODE, kind="lxc", vmid=195)
+    pve_power_api.verify_local_lxc_state(target, "stopped")
 
 
 def recent_task_path(until=None):

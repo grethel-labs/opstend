@@ -68,6 +68,47 @@ def _matches_task(data: object, fields: dict) -> bool:
     )
 
 
+def _task_fields(
+    upid: object,
+    pattern: re.Pattern[str],
+    target: GuestTarget,
+    expected_worker: str,
+    expected_actor: str,
+    since: int,
+    until: int | None,
+) -> dict | None:
+    if not isinstance(upid, str) or len(upid) > 512:
+        return None
+    match = pattern.fullmatch(upid)
+    if match is None:
+        return None
+    node, raw_pid, raw_pstart, raw_time, worker, vmid, actor = match.groups()
+    pid, pstart, start = (int(raw, 16) for raw in (raw_pid, raw_pstart, raw_time))
+    if (
+        node != target.node
+        or worker != expected_worker
+        or vmid != str(target.vmid)
+        or actor != expected_actor
+        or not pid
+        or not pstart
+        or start < since
+        or (until is not None and start > until)
+    ):
+        return None
+    user, _, tokenid = expected_actor.partition("!")
+    return {
+        "upid": upid,
+        "node": node,
+        "type": worker,
+        "id": vmid,
+        "user": user,
+        "tokenid": tokenid,
+        "pid": pid,
+        "pstart": pstart,
+        "starttime": start,
+    }
+
+
 def _check_pending(data: object) -> None:
     if not isinstance(data, list):
         raise _denied()
@@ -124,13 +165,15 @@ def verify_local_pending(target: GuestTarget) -> None:
 
 
 def verify_local_lxc_state(target: GuestTarget, expected_state: GuestState) -> None:
-    """Require LXC's direct state because its PVE status conflates frozen and running."""
-    if target.kind == "qemu":
+    """Distinguish a running LXC guest from a frozen one."""
+    # A configured template or a guest that has not started may have no LXC
+    # runtime record. Callers verify PVE's stopped state and absent PID first.
+    if target.kind != "lxc" or expected_state != "running":
         return
     state = _read_local(target, ["/usr/bin/lxc-info", "-n", str(target.vmid), "-sH"], 64)
     if state not in (b"RUNNING\n", b"STOPPED\n", b"FROZEN\n"):
         raise _unavailable()
-    if state != expected_state.upper().encode("ascii") + b"\n":
+    if state != b"RUNNING\n":
         raise _denied()
 
 
@@ -250,36 +293,9 @@ class PowerApi:
         since: int,
         until: int | None,
     ) -> dict | None:
-        if not isinstance(upid, str) or len(upid) > 512:
-            return None
-        match = _UPID.fullmatch(upid)
-        if match is None:
-            return None
-        node, raw_pid, raw_pstart, raw_time, worker, vmid, actor = match.groups()
-        pid, pstart, start = (int(raw, 16) for raw in (raw_pid, raw_pstart, raw_time))
-        if (
-            node != target.node
-            or worker != _worker_type(target, operation)
-            or vmid != str(target.vmid)
-            or actor != self.actor
-            or not pid
-            or not pstart
-            or start < since
-            or (until is not None and start > until)
-        ):
-            return None
-        user, _, tokenid = self.actor.partition("!")
-        return {
-            "upid": upid,
-            "node": node,
-            "type": worker,
-            "id": vmid,
-            "user": user,
-            "tokenid": tokenid,
-            "pid": pid,
-            "pstart": pstart,
-            "starttime": start,
-        }
+        return _task_fields(
+            upid, _UPID, target, _worker_type(target, operation), self.actor, since, until
+        )
 
     def dispatch(
         self, target: GuestTarget, operation: LegOperation, *, dispatched_at: float
