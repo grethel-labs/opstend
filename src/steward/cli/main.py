@@ -1545,6 +1545,30 @@ def cmd_pve_native_install(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pve_native_lifecycle(args: argparse.Namespace) -> int:
+    from ..core.pve_native_install import InstallError
+    from ..core.pve_native_lifecycle import rollback, upgrade
+    from ..core.pve_native_remove import remove
+
+    try:
+        if args.pve_command == "upgrade":
+            result = upgrade(
+                release_archive=args.release_archive,
+                release_public_key=args.release_public_key,
+                wheelhouse=args.wheelhouse,
+            )
+        elif args.pve_command == "rollback":
+            result = rollback(target=args.to)
+        else:
+            result = remove(plan=args.plan, export_config=args.export_config)
+    except ValueError as exc:
+        raise CliError(str(exc), EXIT_INVALID) from None
+    except InstallError as exc:
+        raise CliError(str(exc), EXIT_UNAVAILABLE) from None
+    say(json.dumps(result, indent=2))
+    return 0
+
+
 def cmd_pve_native_status(_args: argparse.Namespace) -> int:
     from ..pve_native_runtime import read_status
 
@@ -1690,9 +1714,7 @@ def build_parser() -> argparse.ArgumentParser:
     token.add_argument("--force", action="store_true", help="rotate an existing token")
     token.set_defaults(func=cmd_init_token)
 
-    pve = sub.add_parser(
-        "pve-native", help=f"inspect or install on the local Proxmox VE host ({PROFILE})"
-    )
+    pve = sub.add_parser("pve-native", help=f"manage the local native Proxmox profile ({PROFILE})")
     pve_sub = pve.add_subparsers(dest="pve_command", required=True)
     for name, help_text in (
         ("preflight", "check compatibility and readiness for the native profile"),
@@ -1714,6 +1736,19 @@ def build_parser() -> argparse.ArgumentParser:
             command.set_defaults(func=cmd_pve_native_install)
         else:
             command.set_defaults(func=cmd_pve_native)
+    pve_upgrade = pve_sub.add_parser("upgrade", help="activate a newer signed release as root")
+    pve_upgrade.add_argument("--release-archive", required=True, type=Path)
+    pve_upgrade.add_argument("--release-public-key", required=True, type=Path)
+    pve_upgrade.add_argument("--wheelhouse", required=True, type=Path)
+    pve_upgrade.set_defaults(func=cmd_pve_native_lifecycle)
+    pve_rollback = pve_sub.add_parser("rollback", help="restore a previously verified release")
+    pve_rollback.add_argument("--to", required=True, metavar="VERSION")
+    pve_rollback.set_defaults(func=cmd_pve_native_lifecycle)
+    pve_remove = pve_sub.add_parser("remove", help="remove the native units and installed packages")
+    remove_options = pve_remove.add_mutually_exclusive_group()
+    remove_options.add_argument("--plan", action="store_true", help="preview removal and retention")
+    remove_options.add_argument("--export-config", type=Path, metavar="PATH")
+    pve_remove.set_defaults(func=cmd_pve_native_lifecycle)
     pve_sub.add_parser("status", help="read the local native snapshot as root").set_defaults(
         func=cmd_pve_native_status
     )

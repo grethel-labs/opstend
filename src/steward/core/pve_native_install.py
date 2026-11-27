@@ -34,7 +34,9 @@ _WHEEL = re.compile(
 )
 _SAFE_REF = re.compile(r"/[A-Za-z0-9_./-]+")
 _JOURNAL = "install.json"
+_JOURNAL_LIMIT = 64 * 1024
 _MARKER = ".install-intent"
+_MOUNTINFO = Path("/proc/self/mountinfo")
 _CHILD_LOCK = ContextVar("native_install_child_lock", default=())
 
 
@@ -73,6 +75,21 @@ def _secure_directory(path: Path) -> None:
     entry = path.lstat()
     if not stat.S_ISDIR(entry.st_mode) or entry.st_uid != _ROOT_UID or entry.st_mode & 0o022:
         raise InstallError("Expected a root-owned directory without unsafe write permissions.")
+
+
+def _verify_unmounted(*roots: Path) -> None:
+    lines = _MOUNTINFO.read_bytes().splitlines()
+    if not lines:
+        raise InstallError("Could not verify native package mount boundaries.")
+    for line in lines:
+        fields = line.split(b" ")
+        if len(fields) < 10 or b" - " not in line:
+            raise InstallError("Could not verify native package mount boundaries.")
+        mount = Path(
+            os.fsdecode(re.sub(rb"\\([0-7]{3})", lambda m: bytes([int(m[1], 8)]), fields[4]))
+        )
+        if any(mount.is_relative_to(root) for root in roots):
+            raise InstallError(f"A mounted filesystem intersects a native package path ({mount}).")
 
 
 def _credential(path: Path, roots: tuple[Path, ...], *, private: bool) -> None:
@@ -149,8 +166,8 @@ def _wheel_snapshot(payload: dict, wheelhouse: Path, scratch: Path) -> tuple[lis
     return list(selected.values()), digests
 
 
-def _require_native_release(payload: dict) -> str:
-    if payload["version"] != __version__:
+def _require_native_release(payload: dict, *, match_installer: bool = True) -> str:
+    if match_installer and payload["version"] != __version__:
         raise InstallError("The signed native release must match the installer version exactly.")
     root = Path(payload["dir"])
     with zipfile.ZipFile(root / payload["wheel"]) as archive:
@@ -303,14 +320,17 @@ def _journal_bytes(journal: dict | list) -> bytes:
 
 
 def _update_journal(config: Path, journal: dict) -> None:
+    contents = _journal_bytes(journal)
+    if len(contents) > _JOURNAL_LIMIT:
+        raise InstallError("The native installation journal exceeds its size limit.")
     with tempfile.TemporaryDirectory(dir=config.parent, prefix=".opstend-pve-stage-") as name:
         source = Path(name) / _JOURNAL
-        _write_file(source, _journal_bytes(journal), 0o600)
+        _write_file(source, contents, 0o600)
         source.replace(config / _JOURNAL)
         _fsync_directory(config)
 
 
-def _load_journal(config: Path, intent: dict, accounts: set[str]) -> dict | None:
+def _read_journal(config: Path) -> dict | None:
     if not native._exists(config):
         return None
     _directory(config, 0o700, _ROOT_UID, _ROOT_GID)
@@ -321,9 +341,18 @@ def _load_journal(config: Path, intent: dict, accounts: set[str]) -> dict | None
     _object(path, stat.S_IFREG, 0o600, _ROOT_UID, _ROOT_GID)
     try:
         journal = json.loads(
-            native._read_file(path, 64 * 1024, private=True),
+            native._read_file(path, _JOURNAL_LIMIT, private=True),
             object_pairs_hook=native._unique_object,
         )
+        if not isinstance(journal, dict):
+            raise ValueError
+        return journal
+    except (ValueError, TypeError):
+        raise InstallError("Invalid native installation journal.") from None
+
+
+def _validate_install_journal(journal: dict, intent: dict, accounts: set[str]) -> None:
+    try:
         if (
             set(journal) != {"intent", "uids", "tree", "complete", "reservation"}
             or journal["intent"] != intent
@@ -342,7 +371,6 @@ def _load_journal(config: Path, intent: dict, accounts: set[str]) -> dict | None
         raise InstallError(
             "The native installation journal does not match this exact intent."
         ) from None
-    return journal
 
 
 def _lookup(database: str, key: str) -> str | None:
@@ -449,9 +477,8 @@ def _pending_tree(path: Path, journal: dict) -> None:
         _secure_directory(venv)
 
 
-def _prepare_version(
-    path: Path, config: Path, journal: dict, payload: dict, wheels: list[Path]
-) -> None:
+def _prepare_version(path: Path, journal: dict, payload: dict, wheels: list[Path]) -> str:
+    _verify_unmounted(path)
     if not native._exists(path):
         _publish_directory(
             path,
@@ -464,10 +491,11 @@ def _prepare_version(
     path.chmod(0o700)
     venv = path / "venv"
     if native._exists(venv):
+        if not shutil.rmtree.avoids_symlink_attacks:
+            raise InstallError("Native package rebuild requires symlink-safe directory removal.")
         shutil.rmtree(venv)
     _build_venv(payload, wheels, venv)
-    journal["tree"] = _sealed_tree(path, prepare=True)
-    _update_journal(config, journal)
+    return _sealed_tree(path, prepare=True)
 
 
 def _sealed_tree(path: Path, *, prepare: bool = False) -> str:
@@ -703,9 +731,15 @@ def _install_locked(
     payload: dict,
     dependencies: list[Path],
 ) -> dict:
+    from . import pve_native_lifecycle as lifecycle
+
     install, config, state = (paths[key] for key in ("install", "config", "state"))
     version = install / "releases" / payload["version"]
-    journal = _load_journal(config, intent, set(accounts))
+    journal = _read_journal(config)
+    if isinstance(journal, dict) and journal.get("schema") == 2:
+        return lifecycle.reconcile_install(paths, lifecycle.load_journal(config), intent)
+    if journal is not None:
+        _validate_install_journal(journal, intent, set(accounts))
     owned_paths, owned_units, owned_accounts = _admitted_objects(paths, accounts, journal, version)
     result = native.collect_preflight(
         mode=mode,
@@ -755,7 +789,8 @@ def _install_locked(
     _ensure_directory(install, 0o755, _ROOT_UID, _ROOT_GID, journal=journal)
     _ensure_directory(version.parent, 0o755, _ROOT_UID, _ROOT_GID)
     if journal["tree"] is None:
-        _prepare_version(version, config, journal, payload, dependencies)
+        journal["tree"] = _prepare_version(version, journal, payload, dependencies)
+        _update_journal(config, journal)
     for name, uid in journal["uids"].items():
         if name not in owned_accounts:
             _create_identity(name, uid, journal["reservation"])
@@ -851,7 +886,7 @@ def install(
                 intent = {
                     "schema": 1,
                     "manifest": manifest,
-                    "release_key": hashlib.sha256(key.public_bytes_raw()).hexdigest(),
+                    "release_key": release.key_id(key),
                     "version": payload["version"],
                     "mode": mode,
                     "api_name": api_name,

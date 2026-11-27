@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import stat
 import zipfile
 from pathlib import Path
@@ -32,13 +33,14 @@ def inputs(tmp_path, source_tree):
     public = write_public(key, tmp_path / "release.pub")
     public.chmod(0o644)
 
-    def build(*, defect=None):
-        version = "9.9.9" if defect == "version" else __version__
-        out = tmp_path / f"release-{defect}"
+    def build(*, defect=None, version=__version__, variant="", different_signer=False):
+        if defect == "version":
+            version = "9.9.9"
+        out = tmp_path / f"release-{version}-{defect}-{variant}"
         out.mkdir()
         wheel = out / f"steward-{version}-py3-none-any.whl"
         with zipfile.ZipFile(wheel, "w") as archive:
-            archive.writestr("steward/core/pve_native_install.py", "# fixture")
+            archive.writestr("steward/core/pve_native_install.py", f"# fixture {variant}")
             prefix = "lookalike/" if defect == "membership" else ""
             archive.writestr(f"{prefix}steward/pve_native_runtime.py", "# fixture")
         requirements = out / "requirements.txt"
@@ -48,6 +50,7 @@ def inputs(tmp_path, source_tree):
         bundle = out / "bundles" / "fixture" / "main.py"
         bundle.parent.mkdir(parents=True)
         bundle.write_text("# synthetic S01 bundle")
+        signer = new_key() if different_signer else key
         release.finalize_release(
             out,
             version=version,
@@ -58,7 +61,7 @@ def inputs(tmp_path, source_tree):
             wheel=wheel.name,
             root=source_tree,
             subset_path=source_tree / "subset.yml",
-            signing_key=None if defect == "unsigned" else key,
+            signing_key=None if defect == "unsigned" else signer,
             source={"commit": COMMIT, "dirty": False},
             license_lookup=lambda _: "MIT",
         )
@@ -68,6 +71,9 @@ def inputs(tmp_path, source_tree):
         release.pack_release(out, archive)
         if defect == "key":
             public_key = write_public(new_key(), tmp_path / "wrong.pub")
+            public_key.chmod(0o644)
+        elif different_signer:
+            public_key = write_public(signer, tmp_path / "different.pub")
             public_key.chmod(0o644)
         else:
             public_key = public
@@ -129,17 +135,19 @@ def host(tmp_path, monkeypatch):
     accounts = {}
     comments = {}
     active = set()
-    enabled = set()
+    loaded = set()
     commands = []
     inspected = []
     fixture = SimpleNamespace(
         paths=paths,
         unit_dir=unit_dir,
         accounts=accounts,
+        active=active,
         commands=commands,
         inspected=inspected,
         fail_pip=False,
         fail_start=False,
+        fail_start_versions=set(),
         package_conflict=False,
     )
 
@@ -177,25 +185,39 @@ def host(tmp_path, monkeypatch):
             operation, *args = argv[3:]
             if operation == "show":
                 name = args[-1]
-                output = (
-                    f"LoadState=loaded\nFragmentPath={unit_dir / name}\nDropInPaths=\nType=notify\n"
-                    f"ActiveState={'active' if name in active else 'inactive'}\n"
-                    f"UnitFileState={'enabled' if name in enabled else 'disabled'}\n"
-                    "NeedDaemonReload=no\n"
-                )
+                if name in loaded:
+                    path = unit_dir / name
+                    output = (
+                        f"LoadState=loaded\nFragmentPath={path}\nDropInPaths=\nType=notify\n"
+                        f"ActiveState={'active' if name in active else 'inactive'}\n"
+                        f"MainPID={'12345' if name in active else '0'}\n"
+                        f"UnitFileState={'enabled' if installer._want(path).exists() else 'disabled'}\n"
+                        f"NeedDaemonReload={'no' if path.exists() else 'yes'}\n"
+                    )
+                else:
+                    status = 1
+                    output = (
+                        "LoadState=not-found\nFragmentPath=\nDropInPaths=\n"
+                        "ActiveState=inactive\nMainPID=0\nUnitFileState=\nNeedDaemonReload=no\n"
+                    )
             elif operation == "enable":
                 path = unit_dir / args[0]
                 want = installer._want(path)
                 want.parent.mkdir(mode=0o755, exist_ok=True)
                 want.symlink_to(path)
-                enabled.add(path.name)
             elif operation == "start":
-                if fixture.fail_start:
+                release_path = (paths["install"] / "current").readlink()
+                if fixture.fail_start or release_path.name in fixture.fail_start_versions:
                     status = 1
                 else:
-                    active.add(args[0])
+                    active.add(args[-1])
+            elif operation == "stop":
+                assert args[0] == "--job-mode=ignore-dependencies"
+                active.discard(args[-1])
             else:
                 assert argv[3:] == ["daemon-reload"]
+                loaded.clear()
+                loaded.update(path.name for path in unit_dir.glob("*.service"))
         elif argv[0] == "/usr/sbin/useradd":
             accounts[argv[-1]] = int(argv[argv.index("--uid") + 1])
             comments[argv[-1]] = argv[argv.index("--comment") + 1]
@@ -446,3 +468,416 @@ def test_changed_owned_unit_is_not_overwritten(inputs, host):
         installer.install(**args)
     assert len(host.commands) == command_count
     assert unit.read_bytes() == contents
+
+
+NEXT_RELEASE = "99.0.0rc1"
+AGENT_UNIT = f"{native._AGENT}.service"
+UI_UNIT = f"{native._UI}.service"
+
+
+def release_args(args):
+    return {name: args[name] for name in ("release_archive", "release_public_key", "wheelhouse")}
+
+
+def operation_commands(host, start):
+    return systemd_mutations(host.commands[start:])
+
+
+def active_release(host):
+    return (host.paths["install"] / "current").readlink().name
+
+
+def test_signed_native_upgrade_and_rollback_preserve_data_and_unit_identity(tmp_path, inputs, host):
+    from steward.core.pve_native_lifecycle import rollback, upgrade
+
+    args = inputs.build()
+    cert, key = ui_certificate(tmp_path)
+    admin = tmp_path / "admin"
+    admin.write_text(ADMIN_TOKEN)
+    admin.chmod(0o600)
+    args.update(mode="standalone", admin_token_file=admin, ui_cert_file=cert, ui_key_file=key)
+    installer.install(**args)
+    journal = host.paths["config"] / installer._JOURNAL
+    assert json.loads(journal.read_bytes())["intent"]["schema"] == 1
+    units = {path: path.read_bytes() for path in host.unit_dir.glob("*.service")}
+    data = host.paths["state"] / "agent" / "keep"
+    data.write_text("keep this data")
+    credentials = {
+        path: (path.stat().st_ino, path.read_bytes()) for path in (admin, key, args["token_file"])
+    }
+
+    candidate = release_args(inputs.build(version=NEXT_RELEASE))
+    start = len(host.commands)
+    assert upgrade(**candidate)["changed"] == 1
+    assert active_release(host) == NEXT_RELEASE
+    assert operation_commands(host, start) == [
+        ["stop", "--job-mode=ignore-dependencies", UI_UNIT],
+        ["stop", "--job-mode=ignore-dependencies", AGENT_UNIT],
+        ["start", "--job-mode=ignore-dependencies", AGENT_UNIT],
+        ["start", "--job-mode=ignore-dependencies", UI_UNIT],
+    ]
+    start = len(host.commands)
+    assert upgrade(**candidate)["changed"] == 0
+    assert not operation_commands(host, start)
+
+    assert rollback(target=__version__)["changed"] == 1
+    assert active_release(host) == __version__
+    start = len(host.commands)
+    assert rollback(target=__version__)["changed"] == 0
+    assert not operation_commands(host, start)
+    assert {path: path.read_bytes() for path in units} == units
+    assert data.read_text() == "keep this data"
+    assert {path: (path.stat().st_ino, path.read_bytes()) for path in credentials} == credentials
+    assert host.active == {AGENT_UNIT, UI_UNIT}
+    assert len(host.accounts) == 2
+
+
+@pytest.mark.parametrize("defect", ["other-signer", "invalid", "same-version", "owned-unit-drift"])
+def test_upgrade_refuses_bad_artifact_or_drift_before_mutating(inputs, host, defect):
+    from steward.core.pve_native_lifecycle import upgrade
+
+    installer.install(**inputs.build())
+    journal = host.paths["config"] / installer._JOURNAL
+    previous_bytes = journal.read_bytes()
+    version = __version__ if defect == "same-version" else NEXT_RELEASE
+    candidate = release_args(
+        inputs.build(
+            version=version,
+            variant=defect,
+            different_signer=defect == "other-signer",
+            defect="tampered" if defect == "invalid" else None,
+        )
+    )
+    if defect == "owned-unit-drift":
+        with (host.unit_dir / AGENT_UNIT).open("a") as handle:
+            handle.write("# drift\n")
+    start = len(host.commands)
+    with pytest.raises(installer.InstallError):
+        upgrade(**candidate)
+    assert not operation_commands(host, start)
+    assert journal.read_bytes() == previous_bytes
+    assert active_release(host) == __version__
+    assert {path.name for path in (host.paths["install"] / "releases").iterdir()} == {__version__}
+
+
+@pytest.mark.parametrize("source_can_restart", [True, False])
+def test_failed_upgrade_restore_verifies_running_source_or_remains_recoverable(
+    inputs, host, source_can_restart
+):
+    from steward.core.pve_native_lifecycle import rollback, upgrade
+
+    installer.install(**inputs.build())
+    host.fail_start_versions.add(NEXT_RELEASE)
+    if not source_can_restart:
+        host.fail_start_versions.add(__version__)
+    with pytest.raises(installer.InstallError):
+        upgrade(**release_args(inputs.build(version=NEXT_RELEASE)))
+    assert active_release(host) == __version__
+    if not source_can_restart:
+        assert not host.active
+        host.fail_start_versions.remove(__version__)
+        assert rollback(target=__version__)["changed"] == 1
+    assert host.active == {AGENT_UNIT}
+    assert active_release(host) == __version__
+
+
+@pytest.mark.parametrize("source_can_restart", [True, False])
+def test_failed_explicit_rollback_restores_the_last_active_release(
+    inputs, host, source_can_restart
+):
+    from steward.core.pve_native_lifecycle import rollback, upgrade
+
+    installer.install(**inputs.build())
+    upgrade(**release_args(inputs.build(version=NEXT_RELEASE)))
+    host.fail_start_versions.add(__version__)
+    if not source_can_restart:
+        host.fail_start_versions.add(NEXT_RELEASE)
+    with pytest.raises(installer.InstallError, match="Native rollback failed"):
+        rollback(target=__version__)
+    assert active_release(host) == NEXT_RELEASE
+    if not source_can_restart:
+        assert not host.active
+        host.fail_start_versions.remove(NEXT_RELEASE)
+        assert rollback(target=NEXT_RELEASE)["changed"] == 1
+    assert host.active == {AGENT_UNIT}
+    assert active_release(host) == NEXT_RELEASE
+
+
+@pytest.mark.parametrize("recovery", ["upgrade", "rollback"])
+def test_interrupted_activation_resumes_exact_signed_release(inputs, host, monkeypatch, recovery):
+    from steward.core.pve_native_lifecycle import rollback, upgrade
+
+    installer.install(**inputs.build())
+    candidate = release_args(inputs.build(version=NEXT_RELEASE))
+    execute = installer._run
+
+    def interrupted(argv, *, timeout):
+        if argv[3:] == ["start", "--job-mode=ignore-dependencies", AGENT_UNIT]:
+            raise KeyboardInterrupt
+        return execute(argv, timeout=timeout)
+
+    monkeypatch.setattr(installer, "_run", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        upgrade(**candidate)
+    assert active_release(host) == NEXT_RELEASE
+    assert not host.active
+    monkeypatch.setattr(installer, "_run", execute)
+    start = len(host.commands)
+    if recovery == "upgrade":
+        assert upgrade(**candidate)["changed"] == 1
+        assert active_release(host) == NEXT_RELEASE
+    else:
+        assert rollback(target=__version__)["changed"] == 1
+        assert active_release(host) == __version__
+    assert host.active == {AGENT_UNIT}
+    assert all(argv[0] == "/usr/bin/systemctl" for argv in host.commands[start:])
+
+
+def test_staged_upgrade_retry_preserves_active_source_until_candidate_is_sealed(inputs, host):
+    from steward.core.pve_native_lifecycle import upgrade
+
+    installer.install(**inputs.build())
+    candidate = release_args(inputs.build(version=NEXT_RELEASE))
+    start = len(host.commands)
+    host.fail_pip = True
+    with pytest.raises(installer.InstallError, match="pinned offline"):
+        upgrade(**candidate)
+    assert not operation_commands(host, start)
+    assert active_release(host) == __version__
+    assert host.active == {AGENT_UNIT}
+    host.fail_pip = False
+    assert upgrade(**candidate)["changed"] == 1
+    assert active_release(host) == NEXT_RELEASE
+
+
+def test_staged_upgrade_refuses_to_rebuild_over_nested_mount(tmp_path, inputs, host, monkeypatch):
+    from steward.core.pve_native_lifecycle import upgrade
+
+    installer.install(**inputs.build())
+    candidate = release_args(inputs.build(version=NEXT_RELEASE))
+    host.fail_pip = True
+    with pytest.raises(installer.InstallError, match="pinned offline"):
+        upgrade(**candidate)
+    host.fail_pip = False
+
+    pending = host.paths["install"] / "releases" / NEXT_RELEASE / "venv"
+    sentinel = pending / "keep"
+    sentinel.write_bytes(b"retain mounted data")
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(f"17 14 8:1 / {sentinel} rw - ext4 /dev/test rw\n")
+    monkeypatch.setattr(installer, "_MOUNTINFO", mountinfo)
+    start = len(host.commands)
+    with pytest.raises(installer.InstallError, match="mounted filesystem"):
+        upgrade(**candidate)
+    assert sentinel.read_bytes() == b"retain mounted data"
+    assert not operation_commands(host, start)
+    assert active_release(host) == __version__
+
+
+@pytest.fixture
+def removable_test_tree(monkeypatch, host):
+    original = shutil.rmtree
+    install = host.paths["install"]
+
+    def remove_owned_test_tree(path, *args, **kwargs):
+        # The fixture models UID 0 but runs as an ordinary test user. Make only
+        # this test's quarantine writable before using the real recursive deletion.
+        target = Path(path)
+        if target.parent == install.parent and target.name.startswith(f".{install.name}-remove-"):
+            for directory, _, _ in os.walk(target):
+                Path(directory).chmod(0o700)
+        return original(path, *args, **kwargs)
+
+    remove_owned_test_tree.avoids_symlink_attacks = original.avoids_symlink_attacks
+    monkeypatch.setattr(shutil, "rmtree", remove_owned_test_tree)
+
+
+def test_removal_plan_and_apply_keep_operator_material_even_without_pve(
+    tmp_path, inputs, host, monkeypatch, removable_test_tree
+):
+    from steward.core.pve_native_remove import remove
+
+    args = inputs.build()
+    installer.install(**args)
+    data = host.paths["state"] / "agent" / "retained.sqlite"
+    data.write_bytes(b"keep database")
+    data_inode = data.stat().st_ino
+    unit = host.unit_dir / AGENT_UNIT
+    enablement = installer._want(unit)
+    unrelated = host.unit_dir / "foreign.service"
+    unrelated.write_text("unrelated unit")
+    other_link = enablement.parent / unrelated.name
+    other_link.symlink_to(unrelated)
+    credential = args["ca_file"]
+    credential_state = (credential.stat().st_ino, credential.read_bytes())
+    args["token_file"].unlink()
+    identities = host.accounts.copy()
+    journal = host.paths["config"] / installer._JOURNAL
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("removal needs no Proxmox API")
+
+    monkeypatch.setattr(native, "_probe_api", unavailable)
+    journal_bytes = journal.read_bytes()
+    start = len(host.commands)
+    preview = remove(plan=True)
+    encoded_plan = json.dumps(preview)
+    for path in (unit, enablement, host.paths["state"], credential, args["token_file"]):
+        assert str(path) in encoded_plan
+    assert API_TOKEN not in encoded_plan
+    assert journal.read_bytes() == journal_bytes
+    assert not operation_commands(host, start)
+
+    export = tmp_path / "config-export.json"
+    export.write_text("operator owned")
+    with pytest.raises((installer.InstallError, native.PreflightError)):
+        remove(export_config=export)
+    assert export.read_text() == "operator owned"
+    assert journal.read_bytes() == journal_bytes
+    assert not operation_commands(host, start)
+    export.unlink()
+
+    assert remove(export_config=export)["changed"] == 1
+    assert operation_commands(host, start) == [
+        ["stop", "--job-mode=ignore-dependencies", AGENT_UNIT],
+        ["daemon-reload"],
+    ]
+    assert stat.S_IMODE(export.stat().st_mode) == 0o600
+    exported = export.read_text()
+    assert API_TOKEN not in exported and str(args["token_file"]) in exported
+    assert json.loads(exported)
+    assert not native._exists(unit) and not native._exists(enablement)
+    assert not native._exists(host.paths["install"])
+    assert not host.active
+    assert (credential.stat().st_ino, credential.read_bytes()) == credential_state
+    assert not args["token_file"].exists()
+    assert (data.stat().st_ino, data.read_bytes()) == (data_inode, b"keep database")
+    assert host.accounts == identities
+    assert unrelated.read_text() == "unrelated unit" and other_link.readlink() == unrelated
+    start = len(host.commands)
+    assert remove(export_config=export)["changed"] == 0
+    assert not operation_commands(host, start)
+
+
+def test_remove_resumes_after_units_unlinked_before_systemd_readback(
+    inputs, host, monkeypatch, removable_test_tree
+):
+    from steward.core.pve_native_remove import remove
+
+    installer.install(**inputs.build())
+    execute = installer._run
+
+    def interrupted(argv, *, timeout):
+        if argv[3:] == ["daemon-reload"]:
+            raise KeyboardInterrupt
+        return execute(argv, timeout=timeout)
+
+    monkeypatch.setattr(installer, "_run", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        remove()
+    assert not host.active
+    assert not native._exists(host.unit_dir / AGENT_UNIT)
+    assert host.paths["install"].exists()
+    monkeypatch.setattr(installer, "_run", execute)
+    assert remove()["changed"] == 1
+    assert not host.paths["install"].exists()
+
+
+def test_remove_resumes_partial_deletion_of_owned_quarantine(
+    inputs, host, monkeypatch, removable_test_tree
+):
+    from steward.core.pve_native_remove import remove
+
+    installer.install(**inputs.build())
+    root = host.paths["install"]
+    delete = shutil.rmtree
+
+    def interrupted(path, *args, **kwargs):
+        candidate = Path(path)
+        if candidate.parent == root.parent and candidate.name.startswith(f".{root.name}-remove-"):
+            (candidate / installer._MARKER).unlink()
+            raise KeyboardInterrupt
+        return delete(path, *args, **kwargs)
+
+    interrupted.avoids_symlink_attacks = delete.avoids_symlink_attacks
+    monkeypatch.setattr(shutil, "rmtree", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        remove()
+    assert not root.exists()
+    assert not host.active
+    assert len(tuple(root.parent.glob(f".{root.name}-remove-*"))) == 1
+    monkeypatch.setattr(shutil, "rmtree", delete)
+    assert remove()["changed"] == 1
+    assert not tuple(root.parent.glob(f".{root.name}-remove-*"))
+    assert host.paths["state"].exists()
+
+
+def test_remove_refuses_a_mount_under_the_package_before_stopping_units(
+    tmp_path, inputs, host, monkeypatch
+):
+    from steward.core import pve_native_remove as removal
+
+    installer.install(**inputs.build())
+    mountinfo = tmp_path / "mountinfo"
+    nested_mount = host.paths["install"] / "releases" / __version__ / "venv"
+    mountinfo.write_text(f"17 14 8:1 / {nested_mount} rw - ext4 /dev/test rw\n")
+    monkeypatch.setattr(installer, "_MOUNTINFO", mountinfo)
+    journal = host.paths["config"] / installer._JOURNAL
+    before = journal.read_bytes()
+    start = len(host.commands)
+    with pytest.raises(installer.InstallError, match="mounted filesystem"):
+        removal.remove()
+    assert not operation_commands(host, start)
+    assert journal.read_bytes() == before
+    assert host.active == {AGENT_UNIT}
+
+
+def test_remove_can_withdraw_from_failed_upgrade_staging_without_pve(
+    inputs, host, monkeypatch, removable_test_tree
+):
+    from steward.core.pve_native_lifecycle import upgrade
+    from steward.core.pve_native_remove import remove
+
+    args = inputs.build()
+    installer.install(**args)
+    candidate = release_args(inputs.build(version=NEXT_RELEASE))
+    host.fail_pip = True
+    with pytest.raises(installer.InstallError, match="pinned offline"):
+        upgrade(**candidate)
+    args["token_file"].unlink()
+    candidate["release_archive"].unlink()
+    monkeypatch.setattr(native, "_probe_api", lambda *_: pytest.fail("expected local removal"))
+    journal = host.paths["config"] / installer._JOURNAL
+    before = journal.read_bytes()
+    assert remove(plan=True)["changed"] == 0
+    assert before == journal.read_bytes()
+    assert remove()["changed"] == 1
+    assert remove()["changed"] == 0
+    assert not host.paths["install"].exists()
+    assert host.paths["state"].exists()
+    assert not host.active
+
+
+@pytest.mark.parametrize("drift", ["foreign-entry", "foreign-enable-link", "unit-content"])
+def test_remove_refuses_drift_before_stopping_units(inputs, host, drift):
+    from steward.core.pve_native_remove import remove
+
+    installer.install(**inputs.build())
+    marker = host.paths["config"] / installer._JOURNAL
+    before = marker.read_bytes()
+    unit = host.unit_dir / AGENT_UNIT
+    if drift == "foreign-entry":
+        (host.paths["install"] / "keep-me").write_text("operator material")
+    elif drift == "foreign-enable-link":
+        link = installer._want(unit)
+        link.unlink()
+        link.symlink_to(host.unit_dir / "foreign.service")
+    else:
+        with unit.open("a") as handle:
+            handle.write("# external change\n")
+    start = len(host.commands)
+    with pytest.raises(installer.InstallError):
+        remove()
+    assert not operation_commands(host, start)
+    assert marker.read_bytes() == before
+    assert host.active == {AGENT_UNIT}
