@@ -43,6 +43,7 @@ from ..core.secrets import (
     resolve,
     validate_admin_token,
 )
+from . import fleet
 
 ROOT = Path(
     os.environ.get("OPSTEND_ROOT")
@@ -1953,6 +1954,7 @@ def build_parser() -> argparse.ArgumentParser:
     keygen.add_argument("--private-out", required=True)
     keygen.add_argument("--public-out", required=True)
     keygen.set_defaults(func=cmd_release_keygen)
+    fleet.register(sub)
     return parser
 
 

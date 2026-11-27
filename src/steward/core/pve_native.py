@@ -12,6 +12,7 @@ import ssl
 import stat
 import subprocess
 import time
+from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
@@ -354,6 +355,8 @@ def _request_api_response(
     body: bytes = b"",
     include_envelope: bool = False,
     include_error_reason: bool = False,
+    _pinned_address: ipaddress.IPv4Address | ipaddress.IPv6Address | None = None,
+    _leaf_fingerprint: str | None = None,
 ) -> tuple[int, object]:
     host = f"[{api_name}]" if ":" in api_name else api_name
     headers = (
@@ -366,11 +369,25 @@ def _request_api_response(
             f"Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {len(body)}\r\n"
         )
     request = (headers + "\r\n").encode("ascii") + body
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+    family = (
+        socket.AF_INET6 if isinstance(_pinned_address, ipaddress.IPv6Address) else socket.AF_INET
+    )
+    address = str(_pinned_address) if _pinned_address is not None else API_HOST
+    with socket.socket(family, socket.SOCK_STREAM) as connection:
         connection.settimeout(_remaining(deadline))
-        connection.connect((API_HOST, API_PORT))
+        connection.connect((address, API_PORT))
         connection.settimeout(_remaining(deadline))
         with context.wrap_socket(connection, server_hostname=api_name) as tls_socket:
+            if _pinned_address is not None:
+                peer = tls_socket.getpeername()
+                certificate = tls_socket.getpeercert(binary_form=True)
+                if (
+                    ipaddress.ip_address(peer[0]) != _pinned_address
+                    or peer[1] != API_PORT
+                    or not certificate
+                    or sha256(certificate).hexdigest() != _leaf_fingerprint
+                ):
+                    raise ssl.SSLCertVerificationError("PVE peer verification failed.")
             try:
                 tls_socket.settimeout(_remaining(deadline))
                 tls_socket.sendall(request)
