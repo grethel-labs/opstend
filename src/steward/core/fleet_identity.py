@@ -185,6 +185,13 @@ CREATE TABLE IF NOT EXISTS fleet_pve_adoption_history (
 );
 CREATE INDEX IF NOT EXISTS fleet_pve_adoption_history_by_instance
     ON fleet_pve_adoption_history (instance_id, observed_at DESC);
+CREATE TABLE IF NOT EXISTS fleet_policy_revisions (
+    id TEXT PRIMARY KEY, parent TEXT REFERENCES fleet_policy_revisions(id), body TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS fleet_policy_head (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    revision TEXT NOT NULL REFERENCES fleet_policy_revisions(id)
+);
 CREATE TABLE IF NOT EXISTS fleet_pending_guests (
     guest_id TEXT PRIMARY KEY REFERENCES fleet_guests(id),
     observation_id TEXT NOT NULL REFERENCES fleet_observations(id),
