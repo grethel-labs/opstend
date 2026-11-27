@@ -312,8 +312,23 @@ def _remaining(deadline: float) -> float:
     return remaining
 
 
-def _get_api_data(api_name: str, context: ssl.SSLContext, token: str, path: str):
-    deadline = time.monotonic() + _TIMEOUT
+class _ApiPayloadError(ValueError):
+    """The API response is invalid or exceeds the per-response limit."""
+
+
+class _ApiReadError(OSError):
+    """The HTTP exchange failed after TLS was established."""
+
+
+def _read_api_response(
+    api_name: str,
+    context: ssl.SSLContext,
+    token: str,
+    path: str,
+    *,
+    deadline: float,
+    max_response: int,
+) -> tuple[int, object]:
     host = f"[{api_name}]" if ":" in api_name else api_name
     request = (
         f"GET {path} HTTP/1.1\r\nHost: {host}:{API_PORT}\r\n"
@@ -332,14 +347,40 @@ def _get_api_data(api_name: str, context: ssl.SSLContext, token: str, path: str)
                 with http.client.HTTPResponse(reader, method="GET") as response:
                     response.begin()
                     if response.status != 200:
-                        return None
-                    contents = response.read(_MAX_RESPONSE + 1)
-                    if len(contents) > _MAX_RESPONSE or response.length:
-                        return None
+                        return response.status, None
+                    contents = response.read(max_response + 1)
+                    if len(contents) > max_response or response.length:
+                        raise _ApiPayloadError
                 document = json.loads(contents, object_pairs_hook=_unique_object)
-            except (OSError, http.client.HTTPException, ValueError, RecursionError):
-                return None
-    return document.get("data") if isinstance(document, dict) else None
+                if not isinstance(document, dict) or "data" not in document:
+                    raise _ApiPayloadError
+            except OSError:
+                raise _ApiReadError from None
+            except (http.client.HTTPException, ValueError, RecursionError):
+                raise _ApiPayloadError from None
+    return 200, document["data"]
+
+
+def _get_api_data(api_name: str, context: ssl.SSLContext, token: str, path: str):
+    try:
+        _, data = _read_api_response(
+            api_name,
+            context,
+            token,
+            path,
+            deadline=time.monotonic() + _TIMEOUT,
+            max_response=_MAX_RESPONSE,
+        )
+    except (_ApiPayloadError, _ApiReadError):
+        return None
+    return data
+
+
+def _api_context(ca_file: Path) -> ssl.SSLContext:
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ca = _read_file(ca_file, 1024 * 1024).decode("ascii")
+    context.load_verify_locations(cadata=ca)
+    return context
 
 
 def _unique_object(pairs):
@@ -358,9 +399,7 @@ def _probe_api(api_name: str, ca_file: Path, token: str, package_ok: bool) -> di
     if not package_ok:
         return findings
     try:
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ca = _read_file(ca_file, 1024 * 1024).decode("ascii")
-        context.load_verify_locations(cadata=ca)
+        context = _api_context(ca_file)
     except (OSError, ValueError):
         findings["tls"] = _finding(False, "Could not load the operator's PEM CA.")
         return findings
