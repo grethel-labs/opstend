@@ -6,6 +6,33 @@ Er setzt auf dem in RC1 tatsächlich freigegebenen Funktionsumfang auf.
 Eine in RC1 zurückgestellte Funktion ist nur dann Voraussetzung, wenn ihre
 Karte unten ausdrücklich genannt wird.
 
+## Arbeitsziel für RC2
+
+RC2 wird in Funktionspaketen umgesetzt, die ein Operator auf dem
+Mehrmaschinen-Testsystem auf `cn-0001` ausprobieren kann. Das erste Paket
+zeigt in der neuen Admin-Oberfläche den Zustand der tatsächlich angebundenen
+Proxmox-Instanzen. Danach folgen Richtlinien und Gastaktionen, externe Backups
+und Wiederherstellung, Proxmox-HA, Server und Geräte sowie der
+hochverfügbare OpsTend-Betrieb.
+
+1. Pro Paket zuerst festlegen, was der Operator im Browser oder per CLI
+   tun und am echten Ziel nachprüfen kann.
+2. Abgegrenzte Teilaufgaben an Subagenten vergeben. Der Hauptagent führt
+   Datenquelle, Berechtigungen, Bedienung und Tests zusammen und prüft das
+   Ergebnis.
+3. Das geprüfte Paket nach grüner CI zusammenführen und denselben
+   signierten Quellstand unmittelbar auf den beteiligten Test-VMs
+   ausrollen. Den Commit und das sichtbare Ergebnis über die VM-Adresse
+   prüfen. Beispieldaten erscheinen ausschließlich im Funktionsentwurf.
+4. Einen kompakten Nachweis mit Commit, beobachtetem Ergebnis und offenen
+   Grenzen hinterlegen. Danach zum nächsten Paket wechseln. Die formale
+   VM-Abnahme bleibt ein gemeinsamer Lauf pro Meilenstein und übernimmt
+   die vorhandenen Nachweise.
+
+Die offizielle Signatur und exakte Archivabnahme für RC1 laufen parallel.
+Die Archivabnahme auf dem vorgesehenen Testgast folgt auf den geschützten
+Build und die Signatur des Betreibers.
+
 ## Ziel und Reihenfolge
 
 Ein Operator installiert OpsTend nativ auf einem einzelnen Proxmox-VE-Host,
@@ -19,7 +46,7 @@ Steward-Dienste werden nach Bedarf auf geeigneten Rechnern platziert.
 | Meilenstein | Karten und Arbeitspakete | Abschlusskriterien | Stand |
 |---|---|---|---|
 | M9 · Proxmox nativ | [PX01–PX03](plans/proxmox.md#px01--native-installation-und-preflight) | Signierte native Einzelhost-Installation mit lokaler Bedienung, Inventar, freigegebenem VM-/LXC-Lebenszyklus und Anlagen aus zugelassenen Vorlagen. Upgrade, Neustart und Rückbau auf echtem PVE geprüft. | Teilabnahme 2026-11-27. LXC-Klonprüfung und S01-Freigabe offen. [Nachweise](STATUS.md#card-state) |
-| M10 · Gemeinsame Flotte | [FL01–FL03](plans/fleet.md#fl01--registrierung-und-identität) | Einzelhosts und bereits bestehende PVE-Cluster rechnen unter einer gemeinsamen Verwaltung mit stabilen IDs, einer Richtlinienhistorie und pro Ziel sichtbarer Übernahme. Eine zentrale Instanz genügt. | FL01 implementiert. Vier echte API-Pfade auf drei Test-VMs geprüft. FL02.1 und FL02.2 lokal geprüft. Integrierte Flottenabnahme offen. [Nachweise](STATUS.md#card-state) |
+| M10 · Gemeinsame Flotte | [FL01–FL03](plans/fleet.md#fl01--registrierung-und-identität) | Einzelhosts und bereits bestehende PVE-Cluster rechnen unter einer gemeinsamen Verwaltung mit stabilen IDs, einer Richtlinienhistorie und pro Ziel sichtbarer Übernahme. Eine zentrale Instanz genügt. | FL01 und FL02 implementiert. Vier echte API-Pfade auf drei Test-VMs geprüft. FL03 und integrierte Flottenabnahme offen. [Nachweise](STATUS.md#card-state) |
 | M11 · Externe Backups | [BK09–BK11](plans/fleet.md#bk09--gemeinsame-backup-richtlinien-und-zielkatalog) | Gemeinsamer Zeitplan, Quoten und Katalog für PVE/PBS und Linux/Restic. Zwei echte Wiederherstellungen aus einem unabhängigen Standort mit Nutzdatenprüfung. | geplant |
 | M12 · Proxmox HA | [PH01–PH03](plans/proxmox.md#ph01--ha-inventar-und-eignungsprüfung) | Bestehendes HA-Cluster mit drei Knoten integriert. Anwendbarkeit, geplante Wartung und echter Fencing-/Quorum-Test für je einen ausgewählten VM- und LXC-Gast belegt. | geplant |
 | M13 · Server, Geräte und Dashboard | [IN01–IN03](plans/infrastructure.md#in01--eigenständige-linux-server) | Lokale und externe Linux-Ziele sowie ausdrücklich eingebundene Geräte erscheinen mit Inventar, Topologie, Messwerten, Backup- und Ereignisansichten in einer Oberfläche. Rollen gelten auch für Beziehungen. | geplant |

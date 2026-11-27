@@ -18,7 +18,7 @@ function PolicyPreview({ plan }: { plan: FleetPolicyPlan }) {
       <p>Revision <code>{plan.revision}</code></p>
       <p>Plan digest <code>{plan.digest}</code></p>
       <p>Approval expires <time dateTime={plan.expires_at}>{new Date(plan.expires_at).toLocaleString()}</time>.</p>
-      {plan.targets.map(({ target, applied_revision, local_revision, observed_at, effective }) => {
+      {plan.targets.map(({ target, applied_revision, applied_approval_id, local_revision, observed_at, effective }) => {
         const values = {
           maintenance_windows: effective.values.maintenance_windows,
           role_assignments: effective.values.role_assignments.map(({ subject, role }) => `${subject} (${role})`),
@@ -28,7 +28,9 @@ function PolicyPreview({ plan }: { plan: FleetPolicyPlan }) {
         return (
           <details key={targetKey(target)} open>
             <summary><Target target={target} /> · {effective.status}</summary>
-            <p>Previously applied fleet revision <code>{applied_revision ?? "none"}</code></p>
+            <p>Previously applied fleet revision <code>{applied_revision ?? "none"}</code>
+              {applied_approval_id && <> · approval <code>{applied_approval_id}</code></>}
+            </p>
             <p>Local safety revision <code>{local_revision ?? "unknown"}</code>
               {observed_at && <> · reported <time dateTime={observed_at}>{new Date(observed_at).toLocaleString()}</time></>}
             </p>
@@ -134,7 +136,9 @@ export function FleetPolicyPage({ onAuthLost }: PageProps) {
         {head?.targets.length ? (
           <fieldset>
             <legend>Targets to review</legend>
-            {head.targets.map(({ target, site_id, group_ids, applied_revision, can_write }) => {
+            {head.targets.map(({
+              target, site_id, group_ids, applied_revision, local_revision, observed_at, conflict_owner, can_write,
+            }) => {
               const key = targetKey(target);
               return (
                 <div key={key}>
@@ -149,6 +153,11 @@ export function FleetPolicyPage({ onAuthLost }: PageProps) {
                     {" · applied "}<code>{applied_revision ?? "none reported"}</code>
                     {!can_write && " · read only"}
                   </p>
+                  {observed_at && <p className="muted">
+                    Local safety revision <code>{local_revision}</code>
+                    {" · reported "}<time dateTime={observed_at}>{new Date(observed_at).toLocaleString()}</time>
+                  </p>}
+                  {conflict_owner && <p>Local safety conflict · Owned by the local operator</p>}
                 </div>
               );
             })}
@@ -196,11 +205,13 @@ export function FleetPolicyPage({ onAuthLost }: PageProps) {
               <p>Plan digest <code>{outcome.digest}</code></p>
               <table>
                 <thead><tr><th>Target</th><th>Outcome</th><th>Reason</th></tr></thead>
-                <tbody>{outcome.outcomes.map(({ target, status, reason }) => (
+                <tbody>{outcome.outcomes.map(({ target, status, reason, conflict_owner }) => (
                   <tr key={targetKey(target)}>
                     <th scope="row"><Target target={target} /></th>
                     <td>{status}</td>
-                    <td>{reason?.replaceAll("_", " ") ?? "—"}</td>
+                    <td>{reason?.replaceAll("_", " ") ?? "—"}
+                      {conflict_owner && <> · Owned by the local operator</>}
+                    </td>
                   </tr>
                 ))}</tbody>
               </table>

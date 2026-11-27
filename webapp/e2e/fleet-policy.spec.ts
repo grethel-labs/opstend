@@ -49,4 +49,12 @@ test("exact fleet approval survives reload and reports partial target adoption",
   await expect(page.getByRole("combobox", { name: "Approval" })).toHaveValue(approval.id);
   await expect(page.getByRole("cell", { name: "applied", exact: true })).toBeVisible();
   await expect(page.getByRole("cell", { name: "pending", exact: true })).toBeVisible();
+
+  const changed = await page.request.post("/__browser_fixture__/fleet/local-change", {
+    headers: { Origin: ORIGIN, "X-Browser-Fixture-Token": TOKEN },
+  });
+  expect(changed.ok()).toBe(true);
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByText("Local safety conflict · Owned by the local operator")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "applied", exact: true })).toBeVisible();
 });

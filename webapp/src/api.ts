@@ -266,6 +266,9 @@ export interface FleetTargetView {
   site_id: string;
   group_ids: string[];
   applied_revision: string | null;
+  local_revision: string | null;
+  observed_at: string | null;
+  conflict_owner: "local_operator" | null;
   can_write: boolean;
 }
 
@@ -291,6 +294,7 @@ export interface FleetPolicyPlan {
   targets: Array<{
     target: FleetTarget;
     applied_revision: string | null;
+    applied_approval_id: string | null;
     local_revision: string | null;
     observed_at: string | null;
     effective: {
@@ -312,7 +316,12 @@ export interface FleetPolicyApproval {
   digest: string;
   revision: string;
   expires_at: string;
-  outcomes: Array<{ target: FleetTarget; status: "pending" | "applied" | "rejected"; reason: string | null }>;
+  outcomes: Array<{
+    target: FleetTarget;
+    status: "pending" | "applied" | "rejected";
+    reason: string | null;
+    conflict_owner: "local_operator" | null;
+  }>;
 }
 
 const FLEET_POLICY = "/api/fleet/policy";

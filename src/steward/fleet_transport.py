@@ -23,6 +23,9 @@ from pydantic import Field, SecretStr
 from .core.fleet_adoption_models import PveAdoptionEvidence
 from .core.fleet_enrollment import FleetEnrollment, FleetGrant
 from .core.fleet_identity import InventoryObservation, PveConnectorRoute
+from .core.fleet_policy import FleetPolicyConflict
+from .core.fleet_policy_apply import FleetPolicyApply, FleetPolicyDenied, FleetPolicyNotFound
+from .core.fleet_policy_reconcile import FleetPolicySyncReply, FleetPolicySyncRequest
 from .core.pve_inventory_models import (
     MAX_RESOURCES,
     Evidence,
@@ -325,6 +328,7 @@ class _FleetServer(TCPServer):
         self, address: str, port: int, enrollment: FleetEnrollment, context: ssl.SSLContext
     ):
         self.enrollment = enrollment
+        self.policy = FleetPolicyApply(enrollment._registry)
         self.context = context
         self.routes = {
             b"POST /v1/enroll HTTP/1.1": (_Invite, self._enroll),
@@ -333,6 +337,10 @@ class _FleetServer(TCPServer):
             b"POST /v1/inventory HTTP/1.1": (_Inventory, self._publish),
             b"POST /v1/adoption/begin HTTP/1.1": (_Empty, self._begin_adoption),
             b"POST /v1/adoption/publish HTTP/1.1": (_AdoptionInventory, self._publish_adoption),
+            b"POST /v1/policy-target/reconcile HTTP/1.1": (
+                FleetPolicySyncRequest,
+                self._reconcile_policy,
+            ),
         }
         if ipaddress.ip_address(address).version == 6:
             self.address_family = socket.AF_INET6
@@ -377,6 +385,14 @@ class _FleetServer(TCPServer):
             snapshot=request.snapshot.to_inventory(),
             evidence=request.evidence,
         )
+
+    def _reconcile_policy(
+        self, fingerprint: str, request: FleetPolicySyncRequest
+    ) -> FleetPolicySyncReply:
+        try:
+            return self.policy.reconcile_target(fingerprint, request)
+        except (FleetPolicyConflict, FleetPolicyDenied, FleetPolicyNotFound):
+            raise FleetTransportError("fleet policy reconciliation denied") from None
 
 
 def create_server(
@@ -491,6 +507,13 @@ class FleetClient:
 
     def heartbeat(self) -> FleetGrant:
         return self._post(b"/v1/heartbeat", b"{}", FleetGrant)
+
+    def reconcile_policy(self, request: FleetPolicySyncRequest) -> FleetPolicySyncReply:
+        return self._post(
+            b"/v1/policy-target/reconcile",
+            request.model_dump_json().encode(),
+            FleetPolicySyncReply,
+        )
 
     def connector_route(self) -> tuple[int, PveConnectorRoute]:
         result = self._post(b"/v1/connector-route", b"{}", _Route)

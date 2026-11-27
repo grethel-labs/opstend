@@ -29,7 +29,7 @@ from ..core.fleet_policy_apply import (
 from ..fleet_transport import FleetClient, certificate_fingerprint, create_server
 from . import fleet_policy_target
 
-_CAPABILITIES = ("heartbeat", "pve_inventory")
+_CAPABILITIES = ("heartbeat", "pve_inventory", "policy_target")
 _INVITE_PATTERN = re.compile(rb"[A-Za-z0-9_-]{32,128}\n?")
 _POLICY_INPUT_LIMIT = 512 * 1024
 
@@ -72,6 +72,7 @@ def _read_local_profile(path: Path) -> LocalPveProfile:
 
 
 def _issue(enrollment: FleetEnrollment, args: argparse.Namespace) -> None:
+    target = _policy_input(args.target, TypeAdapter(FleetTarget)) if args.target else None
     path = args.invite_out
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
@@ -82,6 +83,7 @@ def _issue(enrollment: FleetEnrollment, args: argparse.Namespace) -> None:
                 key_fingerprint=args.key_fingerprint,
                 capability=args.capability,
                 route_id=args.route_id,
+                target=target,
                 expected_generation=args.generation,
                 ttl_seconds=args.ttl,
             )
@@ -282,6 +284,11 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         command.add_argument("--cert-file", type=Path, required=True)
         command.add_argument("--key-file", type=Path, required=True)
 
+    def client_tls(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--endpoint", required=True)
+        command.add_argument("--server-ca-file", type=Path, required=True)
+        tls(command)
+
     site = operator("register-site", "register a fleet site")
     site.add_argument("--name", required=True)
     host = operator("register-host", "register a site host")
@@ -313,6 +320,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         issue.add_argument("--agent-id", required=True)
         issue.add_argument("--capability", choices=_CAPABILITIES, required=True)
         issue.add_argument("--route-id")
+        issue.add_argument("--target", type=Path, help="private JSON file with one exact target")
         issue.add_argument("--key-fingerprint", required=True)
         issue.add_argument("--generation", type=int, required=name == "rotate", default=0)
         issue.add_argument("--ttl", type=int, default=600)
@@ -360,7 +368,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     coordinator = operator("policy-coordinator", "grant or revoke a browser coordinator role")
     coordinator.add_argument("--subject", required=True)
     coordinator.add_argument("--revoke", action="store_true")
-    fleet_policy_target.register(commands)
+    fleet_policy_target.register(commands, client_tls)
     serve = operator("serve", "serve the private mTLS fleet endpoints")
     serve.add_argument("--bind", default="127.0.0.1", help="explicit private numeric bind address")
     serve.add_argument("--port", type=int, default=8443)
@@ -379,7 +387,5 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         command.add_argument("--pve-ca-file", type=Path, required=True)
         command.add_argument("--pve-token-ref", required=True)
     for command in (enroll, heartbeat, collect, adoption_collect):
-        command.add_argument("--endpoint", required=True)
-        command.add_argument("--server-ca-file", type=Path, required=True)
-        tls(command)
+        client_tls(command)
     fleet.set_defaults(func=_run)

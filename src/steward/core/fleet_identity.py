@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from pydantic import AwareDatetime, field_validator
 
+from .fleet_policy_reconcile_schema import RECONCILE_SCHEMA
 from .pve_inventory_models import (
     EvidenceSource,
     EvidenceState,
@@ -144,6 +145,18 @@ CREATE TABLE IF NOT EXISTS fleet_invitations (
     capability TEXT NOT NULL, route_id TEXT REFERENCES fleet_routes(id), expires_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS fleet_invitations_agent ON fleet_invitations(agent_id);
+CREATE TABLE IF NOT EXISTS fleet_policy_target_invitations (
+    token_hash TEXT PRIMARY KEY REFERENCES fleet_invitations(token_hash) ON DELETE CASCADE,
+    kind TEXT NOT NULL, target_id TEXT NOT NULL, generation INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS fleet_policy_target_invitation_scope
+    ON fleet_policy_target_invitations(kind, target_id, generation);
+CREATE TABLE IF NOT EXISTS fleet_policy_target_bindings (
+    agent_id TEXT PRIMARY KEY REFERENCES fleet_agent_grants(agent_id),
+    grant_generation INTEGER NOT NULL,
+    kind TEXT NOT NULL, target_id TEXT NOT NULL, generation INTEGER NOT NULL,
+    UNIQUE (kind, target_id, generation)
+);
 CREATE TABLE IF NOT EXISTS fleet_observations (
     id TEXT PRIMARY KEY, instance_id TEXT NOT NULL REFERENCES fleet_instances(id),
     route_id TEXT NOT NULL REFERENCES fleet_routes(id), observed_at TEXT NOT NULL,
@@ -331,7 +344,7 @@ class FleetIdentityRegistry:
         finally:
             os.close(fd)
         with self._connection() as db:
-            db.executescript(_SCHEMA)
+            db.executescript(_SCHEMA + RECONCILE_SCHEMA)
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
