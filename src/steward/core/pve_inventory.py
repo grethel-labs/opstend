@@ -37,6 +37,7 @@ from steward.core.pve_native import (
     _supports_api_version,
     _validate_api_name,
 )
+from steward.core.pve_native_credentials import _SystemdCredential
 
 _Acl = dict[str, dict[str, int]]
 _GuestKey = tuple[str, int, str, str | None, str | None, int | None]
@@ -65,9 +66,9 @@ class RegisteredLocalTarget:
     """
 
     api_name: str
-    ca_file: Path
-    inventory_token_file: Path
-    health_token_file: Path
+    ca_file: Path | _SystemdCredential
+    inventory_token_file: Path | _SystemdCredential
+    health_token_file: Path | _SystemdCredential
 
 
 class _InventoryFailure(Exception):
@@ -366,7 +367,7 @@ def collect_inventory(target: RegisteredLocalTarget) -> InventorySnapshot:
     deadline = time.monotonic() + _TIMEOUT
     _validate_api_name(target.api_name)
     if not all(
-        path.is_absolute()
+        isinstance(path, _SystemdCredential) or path.is_absolute()
         for path in (target.ca_file, target.inventory_token_file, target.health_token_file)
     ):
         raise PreflightError("Use absolute paths for the registered CA and PVE token files.")
