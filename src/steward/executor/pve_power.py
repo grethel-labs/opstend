@@ -160,29 +160,47 @@ class PowerExecutor:
         if guest is None:
             raise ExecutorError("policy_denied", "Guest is outside the native power policy.")
         target = GuestTarget(node=authority.policy.node, kind=guest.kind, vmid=guest.vmid)
-        self._guest(authority, target, params.operation)
+        return self._plan(authority, target, params.operation, uuid.uuid4().hex)
+
+    def _plan(
+        self,
+        authority: _Authority,
+        target: GuestTarget,
+        operation: PowerOperation,
+        job_id: JobId,
+        *,
+        fleet_origin: str | None = None,
+        deadline: datetime | None = None,
+    ) -> JobRecord:
+        self._guest(authority, target, operation)
         authority.api.validate_permissions(authority.policy)
-        observed = self._observe(authority, target, params.operation)
-        required = "stopped" if params.operation == "start" else "running"
+        observed = self._observe(authority, target, operation)
+        required = "stopped" if operation == "start" else "running"
         if observed.state != required:
             raise ExecutorError("conflict", "Guest power state does not allow this operation.")
         now = self.now()
+        expires = now + _CONFIRM_TTL
+        if deadline is not None:
+            expires = min(expires, deadline)
+        if expires <= now:
+            raise ExecutorError("conflict", "The native plan has expired.")
         job = JobRecord(
             schema_version=1,
-            job_id=uuid.uuid4().hex,
-            operation=params.operation,
+            job_id=job_id,
+            operation=operation,
             target=target,
             policy_revision=authority.policy.revision,
             binding=authority.binding,
             observation=observed,
             created_at=now,
-            expires_at=now + _CONFIRM_TTL,
+            expires_at=expires,
             updated_at=now,
             state="prepared",
             current_state=observed.state,
             next_action="execute",
             error_code=None,
             legs=(),
+            fleet_origin=fleet_origin,
         )
         self.journal.write(job, previous=None)
         return job
@@ -193,8 +211,22 @@ class PowerExecutor:
     def _expired(self, job: JobRecord) -> bool:
         return not job.created_at <= self.now() < job.expires_at
 
-    def execute(self, params: _ExecuteParams) -> JobRecord:
+    @staticmethod
+    def _check_origin(job: JobRecord, fleet_origin: str | None) -> None:
+        if job.fleet_origin != fleet_origin:
+            raise ExecutorError("policy_denied", "The native job belongs to another origin.")
+
+    def execute(
+        self,
+        params: _ExecuteParams,
+        *,
+        fleet_origin: str | None = None,
+        fleet_check: Callable[[], bool] | None = None,
+    ) -> JobRecord:
         job = self._get(params.job_id)
+        self._check_origin(job, fleet_origin)
+        if fleet_origin is not None and fleet_check is None:
+            raise ExecutorError("policy_denied", "Fleet dispatch requires a live admission check.")
         if job.next_action != "execute":
             return job
         if params.continue_reboot != bool(job.legs):
@@ -235,8 +267,10 @@ class PowerExecutor:
         self._check_kill_switch()
         if self._expired(job):
             return self._fail(job, "confirmation_expired")
+        if fleet_check is not None and not fleet_check():
+            return self._fail(job, "fleet_admission_changed")
         return self._dispatch(
-            job, authority, operation, observed.state, prior_upids, baseline_since
+            job, authority, operation, observed.state, prior_upids, baseline_since, fleet_check
         )
 
     def _check_kill_switch(self) -> None:
@@ -251,6 +285,7 @@ class PowerExecutor:
         current_state: GuestState,
         prior_upids: tuple[str, ...],
         baseline_since: int,
+        fleet_check: Callable[[], bool] | None = None,
     ) -> JobRecord:
         self.audit.append(
             "pve_power_dispatch_intent",
@@ -277,6 +312,8 @@ class PowerExecutor:
             next_action="reconcile",
             error_code=None,
         )
+        if fleet_check is not None and not fleet_check():
+            return self._dispatch_failed(job, leg, "fleet_admission_changed")
         if self.kill_switch():
             return self._dispatch_failed(job, leg, "kill_switch")
         if self._expired(job):
@@ -321,8 +358,9 @@ class PowerExecutor:
             ),
         )
 
-    def reconcile(self, params: _ReconcileParams) -> JobRecord:
+    def reconcile(self, params: _ReconcileParams, *, fleet_origin: str | None = None) -> JobRecord:
         job = self._get(params.job_id)
+        self._check_origin(job, fleet_origin)
         if job.next_action != "reconcile":
             if params.upid is not None:
                 raise ExecutorError("conflict", "This job does not need an unbound native task.")
@@ -523,6 +561,10 @@ def _runtime_context() -> tuple[dict[str, Path], dict, AuditLog]:
 
 def _runtime() -> PowerExecutor:
     paths, installed, audit = _runtime_context()
+    return _runtime_executor(paths, installed, audit)
+
+
+def _runtime_executor(paths: dict[str, Path], installed: dict, audit: AuditLog) -> PowerExecutor:
     return PowerExecutor(
         PowerJournal(_STATE),
         audit,

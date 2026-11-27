@@ -26,6 +26,8 @@ from .core.fleet_identity import InventoryObservation, PveConnectorRoute
 from .core.fleet_policy import FleetPolicyConflict
 from .core.fleet_policy_apply import FleetPolicyApply, FleetPolicyDenied, FleetPolicyNotFound
 from .core.fleet_policy_reconcile import FleetPolicySyncReply, FleetPolicySyncRequest
+from .core.fleet_power import CommandPoll, CommandReply
+from .core.fleet_power_commands import FleetPowerCommands
 from .core.pve_inventory_models import (
     MAX_RESOURCES,
     Evidence,
@@ -329,6 +331,7 @@ class _FleetServer(TCPServer):
     ):
         self.enrollment = enrollment
         self.policy = FleetPolicyApply(enrollment._registry)
+        self.power = FleetPowerCommands(enrollment._registry)
         self.context = context
         self.routes = {
             b"POST /v1/enroll HTTP/1.1": (_Invite, self._enroll),
@@ -337,6 +340,7 @@ class _FleetServer(TCPServer):
             b"POST /v1/inventory HTTP/1.1": (_Inventory, self._publish),
             b"POST /v1/adoption/begin HTTP/1.1": (_Empty, self._begin_adoption),
             b"POST /v1/adoption/publish HTTP/1.1": (_AdoptionInventory, self._publish_adoption),
+            b"POST /v1/pve-power-target/poll HTTP/1.1": (CommandPoll, self._poll_power),
             b"POST /v1/policy-target/reconcile HTTP/1.1": (
                 FleetPolicySyncRequest,
                 self._reconcile_policy,
@@ -393,6 +397,12 @@ class _FleetServer(TCPServer):
             return self.policy.reconcile_target(fingerprint, request)
         except (FleetPolicyConflict, FleetPolicyDenied, FleetPolicyNotFound):
             raise FleetTransportError("fleet policy reconciliation denied") from None
+
+    def _poll_power(self, fingerprint: str, request: CommandPoll) -> CommandReply:
+        try:
+            return self.power.poll(fingerprint, request)
+        except FleetPolicyDenied:
+            raise FleetTransportError("fleet command polling denied") from None
 
 
 def create_server(
@@ -513,6 +523,11 @@ class FleetClient:
             b"/v1/policy-target/reconcile",
             request.model_dump_json().encode(),
             FleetPolicySyncReply,
+        )
+
+    def poll_power(self, request: CommandPoll) -> CommandReply:
+        return self._post(
+            b"/v1/pve-power-target/poll", request.model_dump_json().encode(), CommandReply
         )
 
     def connector_route(self) -> tuple[int, PveConnectorRoute]:

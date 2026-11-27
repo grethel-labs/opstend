@@ -42,12 +42,14 @@ from ..core.audit import AuditLog
 from ..core.backup_view import read as read_backup_view
 from ..core.config import Config, ConfigError, effective, load_yaml, parse_config
 from ..core.config_apply import plan_apply
+from ..core.fleet_power_commands import FleetPowerCommands
 from ..core.secrets import SecretError, redact, validate_admin_token
 from ..core.store import ConflictError, Store
 from ..executor.protocol import DEFAULT_SOCKET, ExecutorError, call
 from .ai_admin import install as install_ai_admin
 from .fleet_policy import install as install_fleet_policy
 from .fleet_policy import open_policy
+from .fleet_power import install as install_fleet_power
 
 COOKIE = "__Host-steward_session"
 LOGIN_WINDOW_S = 300
@@ -503,6 +505,13 @@ def create_app(settings: Settings) -> FastAPI:
         install_fleet_policy(
             app,
             policy=policy,
+            actor=actor,
+            require_session=require_session,
+            max_body_bytes=MAX_BODY_BYTES,
+        )
+        install_fleet_power(
+            app,
+            commands=FleetPowerCommands(policy._registry),
             actor=actor,
             require_session=require_session,
             max_body_bytes=MAX_BODY_BYTES,

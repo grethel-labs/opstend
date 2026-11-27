@@ -22,5 +22,12 @@ export default defineConfig({
       gracefulShutdown: { signal: "SIGTERM", timeout: 5000 },
       env: { PYTHONPATH: "../src" },
     },
+    {
+      command: "../.venv/bin/python ../tests/integration/browser_fleet_power_server.py",
+      url: "http://localhost:19082/healthz",
+      reuseExistingServer: false,
+      gracefulShutdown: { signal: "SIGTERM", timeout: 5000 },
+      env: { PYTHONPATH: "../src" },
+    },
   ],
 });

@@ -185,6 +185,14 @@ class FleetPolicyTargetStore:
         with self._connection() as db:
             return _read(db, datetime.now(UTC), attached=False)
 
+    @contextmanager
+    def admission(self) -> Iterator[FleetPolicyTargetState]:
+        """Keep the reported target policy stable through native command admission."""
+        with self._connection() as db, db:
+            _rollback_journal(db, "main")
+            db.execute("BEGIN IMMEDIATE")
+            yield _read(db, datetime.now(UTC), attached=False)
+
     def reconcile(
         self, exchange: PolicyExchange, approval_id: str | None = None, digest: str | None = None
     ) -> FleetPolicySyncReply:

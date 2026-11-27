@@ -14,11 +14,25 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from steward.cli import fleet as fleet_cli
 from steward.cli import main as cli
-from steward.core.fleet_enrollment import FleetEnrollment
+from steward.core.fleet_enrollment import FleetEnrollment, FleetEnrollmentConflict
 from steward.core.fleet_identity import FleetIdentityRegistry
-from steward.core.fleet_policy import FleetPolicy, FleetPolicyValues, FleetTarget, FleetTargetPolicy
-from steward.core.fleet_policy_apply import FleetPolicyActor, FleetPolicyApply
+from steward.core.fleet_policy import (
+    FleetPolicy,
+    FleetPolicyValues,
+    FleetTarget,
+    FleetTargetPolicy,
+    RoleAssignment,
+)
+from steward.core.fleet_policy_apply import (
+    FleetPolicyActor,
+    FleetPolicyApply,
+    FleetPolicyDenied,
+    FleetPolicyGrant,
+    FleetPolicyNotFound,
+)
 from steward.core.fleet_policy_target import FleetPolicyTargetConfig, FleetPolicyTargetStore
+from steward.core.fleet_power import CommandPoll, CommandReport
+from steward.core.fleet_power_commands import FleetCommandConflict, FleetPowerCommands
 from steward.core.pve_inventory_models import Evidence, InventorySnapshot, parse_resources
 from steward.fleet_transport import FleetClient, FleetTransportError, create_server
 
@@ -637,3 +651,315 @@ def test_mtls_policy_converges_independent_targets_and_recovers_lost_ack(
         with pytest.raises(FleetTransportError):
             first_store.reconcile(rotated.reconcile_policy)
         assert first_store.state().applied_revision == latest.id
+
+
+def _power_setup(tmp_path, now):
+    tmp_path.chmod(0o700)
+    registry = FleetIdentityRegistry(tmp_path / "fleet.sqlite")
+    site = registry.register_site("power-site")
+    targets = {}
+    for name, binding in (("pve-a", "aa" * 32), ("pve-b", "bb" * 32)):
+        host = registry.register_host(site.id, name)
+        instance = registry.register_instance(site.id, kind="standalone", instance_binding=binding)
+        transport_key = "de" * 32
+        route = registry.confirm_route(
+            instance.id,
+            host_id=host.id,
+            node=name,
+            api_name=f"{name}.internal",
+            address="192.168.10.10",
+            instance_binding=binding,
+            transport_fingerprint=transport_key,
+        )
+        snapshot = sample_snapshot(
+            api_name=route.api_name,
+            node=name,
+            observed_at=now,
+            uid="abcde23456abcde23456",
+            registration_ms=1234567890000,
+        )
+        registry.ingest_snapshot(
+            snapshot,
+            route_id=route.id,
+            instance_binding=binding,
+            transport_fingerprint=transport_key,
+            full_guest_coverage=True,
+            received_at=now,
+        )
+        (guest,) = registry.guest_history(instance.id, 190)
+        target = FleetTarget(kind="pve_guest", id=guest.id, generation=guest.generation)
+        agent = registry.register_agent(host.id, "power")
+        targets[target] = agent.id
+
+    owner = FleetPolicyActor("coordinator", True)
+    operator = FleetPolicyActor("power-user")
+    observer = FleetPolicyActor("observer")
+    service = FleetPolicyApply(registry, clock=lambda: now)
+    limits = FleetPolicyValues(
+        role_assignments=(
+            RoleAssignment(subject=operator.subject, role="operator"),
+            RoleAssignment(subject=observer.subject, role="observer"),
+        )
+    )
+    body = FleetPolicy(
+        defaults=limits,
+        limits=limits,
+        targets=tuple(FleetTargetPolicy(target=target) for target in targets),
+    )
+    revision = service.commit(owner, body, parent=None)
+    stores = {}
+    for target in targets:
+        stores[target] = FleetPolicyTargetStore.configure(
+            tmp_path / f"{target.id}.sqlite", FleetPolicyTargetConfig(target=target, limits=limits)
+        )
+        service.report_local(stores[target])
+        for actor in (operator, observer):
+            service.set_grant(owner, FleetPolicyGrant(actor.subject, "write", target=target))
+    plan = service.preview(owner, revision.id, targets)
+    approved = service.approve(owner, plan.digest, "policy-key")
+    polls = []
+    for target, agent_id in targets.items():
+        assert service.adopt_local(stores[target], approved.id, plan.digest).status == "applied"
+        polls.append(
+            (
+                agent_id,
+                CommandPoll(
+                    target=target,
+                    local_revision=stores[target].state().local.revision,
+                    policy_revision=revision.id,
+                    policy_approval=approved.id,
+                ),
+            )
+        )
+    return registry, owner, operator, observer, service, tuple(polls)
+
+
+def _power_enroll(enrollment, agent_id, fingerprint, target, *, generation=0, now=None):
+    invitation = enrollment.issue(
+        agent_id,
+        key_fingerprint=fingerprint,
+        capability="pve_power_target",
+        target=target,
+        expected_generation=generation,
+        now=now,
+    )
+    return invitation.token.get_secret_value()
+
+
+def _power_report(poll, work, state, **fields):
+    report = CommandReport(
+        command_id=work.spec.command_id,
+        claim_id=work.claim_id,
+        state=state,
+        native_digest=work.native_digest or "c1" * 32,
+        **fields,
+    )
+    return poll.model_copy(update={"report": report})
+
+
+def test_mtls_power_is_scoped_and_other_instance_runs_while_first_is_offline(tmp_path, tls):
+    registry, owner, actor, observer, _, ((first_id, first_poll), (second_id, second_poll)) = (
+        _power_setup(tmp_path, datetime.now(UTC))
+    )
+    commands = FleetPowerCommands(registry)
+    enrollment = FleetEnrollment(registry)
+    with loopback(enrollment, tls) as client:
+        first, first_key = client("first")
+        second, second_key = client("wrong")
+        reader, reader_key = client("reader")
+        for agent, poll, connection, key in (
+            (first_id, first_poll, first, first_key),
+            (second_id, second_poll, second, second_key),
+        ):
+            grant = connection.enroll(_power_enroll(enrollment, agent, key, poll.target))
+            assert grant.target == poll.target
+            assert grant.capability == "pve_power_target"
+            with pytest.raises(FleetTransportError):
+                connection.connector_route()
+
+        with pytest.raises(FleetEnrollmentConflict):
+            enrollment.issue(
+                first_id,
+                key_fingerprint=reader_key,
+                capability="policy_target",
+                target=first_poll.target,
+                expected_generation=1,
+            )
+        with pytest.raises(FleetTransportError):
+            reader.poll_power(first_poll)
+        with pytest.raises(FleetTransportError):
+            first.poll_power(second_poll)
+
+        assert len({item.instance_id for item in commands.catalog(actor).targets}) == 2
+        assert not commands.catalog(observer).targets
+        with pytest.raises(FleetPolicyDenied):
+            commands.request(owner, first_poll.target, first_poll.policy_revision, "start", "owner")
+        with pytest.raises(FleetPolicyDenied):
+            commands.request(
+                observer, first_poll.target, first_poll.policy_revision, "start", "observer"
+            )
+
+        def request(poll, key):
+            return commands.request(actor, poll.target, poll.policy_revision, "start", key)
+
+        unavailable = request(first_poll, "first")
+        active = request(second_poll, "second")
+        assert request(second_poll, "second") == active
+        with pytest.raises(FleetCommandConflict):
+            request(first_poll, "second")
+        assert not commands.catalog(observer).commands
+        with pytest.raises(FleetPolicyNotFound):
+            commands.status(observer, active.command_id)
+        work = second.poll_power(second_poll).work
+        assert work.phase == "prepare"
+        assert work.spec.command_id == active.command_id
+        assert second.poll_power(second_poll).work is None
+        assert second.poll_power(_power_report(second_poll, work, "prepared")).work is None
+        review = commands.status(actor, active.command_id)
+        assert review.state == "review"
+        with pytest.raises(FleetCommandConflict):
+            commands.approve(actor, active.command_id, "c1" * 32, "approval")
+        queued = commands.approve(actor, active.command_id, review.digest, "approval")
+        assert queued.state == "queued"
+        assert commands.approve(actor, active.command_id, review.digest, "approval") == queued
+        work = second.poll_power(second_poll).work
+        assert work.phase == "execute"
+        assert work.native_digest == "c1" * 32
+        assert commands.status(actor, active.command_id).state == "released"
+
+        receipt = _power_report(second_poll, work, "accepted", task_ref="a1" * 32)
+        second.poll_power(receipt)
+        second.poll_power(receipt)
+        work = second.poll_power(second_poll).work
+        assert work.phase == "reconcile"
+        forged = _power_report(
+            second_poll, work, "succeeded", task_ref="a2" * 32, observed_state="running"
+        )
+        with pytest.raises(FleetTransportError):
+            second.poll_power(forged)
+        second.poll_power(
+            _power_report(
+                second_poll, work, "succeeded", task_ref="a1" * 32, observed_state="running"
+            )
+        )
+        result = commands.status(actor, active.command_id)
+        assert (result.state, result.observed_state, result.task_ref) == (
+            "succeeded",
+            "running",
+            "a1" * 32,
+        )
+        assert "abcde23456abcde23456" not in result.model_dump_json()
+        assert commands.status(actor, unavailable.command_id).state == "preparing"
+
+
+def test_power_expiry_restart_revocation_and_policy_scope(tmp_path):
+    now = datetime.now(UTC)
+    registry, owner, actor, _, policy, ((agent_id, poll), (other_id, other_poll)) = _power_setup(
+        tmp_path, now
+    )
+    enrollment = FleetEnrollment(registry)
+    for identity, target, fingerprint in (
+        (agent_id, poll.target, "11" * 32),
+        (other_id, other_poll.target, "22" * 32),
+    ):
+        token = _power_enroll(enrollment, identity, fingerprint, target, now=now)
+        enrollment.redeem(token, key_fingerprint=fingerprint, now=now)
+    commands = FleetPowerCommands(registry, now=lambda: now)
+
+    def request(request_poll, key):
+        return commands.request(
+            actor, request_poll.target, request_poll.policy_revision, "start", key
+        )
+
+    def queued(request_poll, key, fingerprint):
+        command = request(request_poll, key)
+        work = commands.poll(fingerprint, request_poll).work
+        commands.poll(fingerprint, _power_report(request_poll, work, "prepared"))
+        review = commands.status(actor, command.command_id)
+        return commands.approve(actor, command.command_id, review.digest, key)
+
+    first_key = "11" * 32
+    first = queued(poll, "first", first_key)
+    second_key = "22" * 32
+    second = queued(other_poll, "second", second_key)
+    issued = commands.poll(first_key, poll).work
+    assert issued.phase == "execute"
+    now = first.expires_at
+    restarted = FleetPowerCommands(
+        FleetIdentityRegistry(tmp_path / "fleet.sqlite"), now=lambda: now
+    )
+    assert restarted.status(actor, first.command_id).state == "uncertain"
+    assert restarted.status(actor, second.command_id).state == "expired"
+    work = restarted.poll(first_key, poll).work
+    assert work.phase == "reconcile"
+    assert work.spec.command_id == issued.spec.command_id
+    assert restarted.poll(second_key, other_poll).work is None
+    with pytest.raises(FleetPolicyDenied):
+        restarted.poll(first_key, _power_report(poll, issued, "accepted", task_ref="a1" * 32))
+    assert enrollment.revoke(agent_id, expected_generation=1) == 2
+    with pytest.raises(FleetEnrollmentConflict):
+        restarted.poll(first_key, poll)
+    next_key = "33" * 32
+    token = _power_enroll(enrollment, agent_id, next_key, poll.target, generation=2, now=now)
+    enrollment.redeem(token, key_fingerprint=next_key, now=now)
+    assert restarted.poll(next_key, poll).work is None
+    with pytest.raises(FleetPolicyDenied):
+        restarted.poll(
+            next_key,
+            _power_report(poll, work, "succeeded", task_ref="a1" * 32, observed_state="running"),
+        )
+    assert restarted.status(actor, first.command_id).state == "uncertain"
+    now = work.claim_until
+    rotated = restarted.poll(next_key, poll).work
+    assert rotated.phase == "reconcile"
+    assert rotated.spec.enrollment_generation == 1
+    assert rotated.recipient_generation == 3
+    restarted.poll(
+        next_key,
+        _power_report(poll, rotated, "succeeded", task_ref="a1" * 32, observed_state="running"),
+    )
+    assert restarted.status(actor, first.command_id).state == "succeeded"
+    policy.set_grant(
+        owner, FleetPolicyGrant(actor.subject, "write", target=poll.target), enabled=False
+    )
+    assert all(item.target != poll.target for item in restarted.catalog(actor).commands)
+
+
+def test_power_revalidates_policy_scope_and_rotation_before_release(tmp_path):
+    now = datetime.now(UTC)
+    registry, owner, actor, _, policy, ((first, left), (second, right)) = _power_setup(
+        tmp_path, now
+    )
+    enrollment = FleetEnrollment(registry)
+    commands = FleetPowerCommands(registry, now=lambda: now)
+
+    def queue(agent_id, poll, fingerprint, key):
+        token = _power_enroll(enrollment, agent_id, fingerprint, poll.target, now=now)
+        enrollment.redeem(token, key_fingerprint=fingerprint, now=now)
+        start = commands.request(actor, poll.target, poll.policy_revision, "start", key)
+        prepare = commands.poll(fingerprint, poll).work
+        commands.poll(fingerprint, _power_report(poll, prepare, "prepared"))
+        review = commands.status(actor, start.command_id)
+        assert review.observed_state == "stopped"
+        return commands.approve(actor, start.command_id, review.digest, key)
+
+    left_key, right_key, rotated_key = "11" * 32, "22" * 32, "33" * 32
+    queued_left = queue(first, left, left_key, "left")
+    queued_right = queue(second, right, right_key, "right")
+
+    writable = FleetPolicyGrant(actor.subject, "write", target=left.target)
+    readable = FleetPolicyGrant(actor.subject, "read", target=left.target)
+    policy.set_grant(owner, readable)
+    policy.set_grant(owner, writable, enabled=False)
+    assert commands.poll(left_key, left).work is None
+    assert commands.status(actor, queued_left.command_id).state == "refused"
+
+    token = _power_enroll(enrollment, second, rotated_key, right.target, generation=1, now=now)
+    enrollment.redeem(token, key_fingerprint=rotated_key, now=now)
+    with pytest.raises(FleetEnrollmentConflict):
+        commands.poll(right_key, right)
+    assert commands.poll(rotated_key, right).work is None
+    assert commands.status(actor, queued_right.command_id).state == "refused"
+    assert commands.request(actor, right.target, right.policy_revision, "start", "fresh").state == (
+        "preparing"
+    )
