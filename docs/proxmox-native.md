@@ -305,3 +305,96 @@ collection publishes a complete snapshot.
 The [PX02 qualification procedure](../tests/integration/gates/m9-px02.md)
 covers the installed CLI and authenticated HTTPS surface, an actual
 PVE permission change, and isolated fault injection for the M9 batch.
+
+## Confirm native guest power operations
+
+Power management is opt-in on native PVE 9.3.1. Start from the trusted native
+operator CLI. It verifies the active signed release before starting the
+executor from its versioned path. Provision one dedicated PVE token with
+privilege separation enabled. Give its PVE user and token a custom role with
+exactly `VM.Audit` and `VM.PowerMgmt` on each registered `/vms/{vmid}` path.
+Keep the token separate from the native health and inventory credentials in a
+root-owned regular file with mode `0400` or `0600`. The executor checks the
+token's effective ACL against the full registry. [PVE user and token management](https://github.com/proxmox/pve-docs/blob/master/pveum.adoc)
+
+Create `/var/lib/opstend-pve-executor` as `root:root` with mode `0700` and
+place `power.json` there as `root:root` with mode `0600`. Use the actual local
+PVE node name, guest type, and the guest's `uid` and millisecond `rtime` from
+the PVE resource roster. To read that roster, run
+`pvesh --noproxy get /cluster/resources --type vm --output-format json` on the
+node. Register a replacement guest explicitly when its generation changes.
+This example registers one QEMU guest.
+
+```json
+{
+  "schema_version": 1,
+  "node": "pve",
+  "write_token_file": "/root/opstend-inputs/pve-power-token",
+  "guests": [
+    {
+      "kind": "qemu",
+      "vmid": 190,
+      "pve_uid": "abcdefghijklmnopqrst",
+      "registered_at_ms": 1795737600000,
+      "operations": ["start", "shutdown", "reboot"]
+    }
+  ]
+}
+```
+
+Use `lxc` as the kind for a container. The executor checks live generation,
+power state, HA assignment, locks, templates, and pending configuration.
+It also reads the exact local pending configuration under root because PVE's
+scoped API can suppress pending options. Only the safety outcome crosses the
+executor boundary. The native power method addresses the VMID, so coordinate
+PVE changes made through other tools during confirmation and dispatch.
+
+Run the following commands on the registered PVE host. Replace `JOB_ID` with
+the identifier returned by the plan. Review the guest and observed state
+before confirming. Each confirmation expires in five minutes.
+
+```sh
+/opt/opstend-pve/current/venv/bin/python -I -B -m steward.cli.main pve-native power plan --vmid 190 --operation reboot
+/opt/opstend-pve/current/venv/bin/python -I -B -m steward.cli.main pve-native power execute --confirm JOB_ID
+/opt/opstend-pve/current/venv/bin/python -I -B -m steward.cli.main pve-native power reconcile --job-id JOB_ID
+```
+
+Reconciliation checks the recorded PVE task and the actual guest state.
+Run it again while `next_action` is `reconcile`. For reboot, the first leg
+uses graceful shutdown. After reconciliation verifies that task and observes
+the guest stopped, `next_action` becomes `execute`. Confirm the start leg with
+`pve-native power execute --confirm JOB_ID --continue-reboot`, then reconcile
+the start task. If the plan expires between legs, the job reports failure and
+the guest may remain stopped. Review its current state with a new plan.
+
+Use `pve-native power status --job-id JOB_ID` to read the local journal. A lost
+response or interrupted dispatch leaves the job `uncertain` after reconciliation
+and holds the VMID for that job. If you can identify the exact task in PVE,
+use `pve-native power reconcile --job-id JOB_ID --upid UPID` to verify and bind it.
+The executor compares a bounded PVE task history against its durable
+pre-dispatch baseline and requires one new matching task. Incomplete or
+ambiguous task history keeps the VMID fenced. Reserve the token for this
+executor so its PVE tasks identify OpsTend dispatches.
+Replaying a confirmation returns the current job once that leg is dispatched.
+Creating `kill-switch` in the executor directory stops dispatch. The native
+remove command preserves the executor directory, including its audit and job
+history. The PVE operator manages credential revocation.
+
+### Power job JSON
+
+The CLI returns the same versioned job object for planning, execution, status,
+and reconciliation. The fields are `schema_version` (currently `1`), `job_id`,
+`operation` (`start`, `shutdown`, `reboot`), and `target` (`node`, `kind`, `vmid`).
+`created_at`, `expires_at`, and `updated_at` are UTC timestamps. `observed_state`
+records the plan's `running` or `stopped` state. `desired_state` records the
+intended final state, and `current_state` holds the latest state known to the
+job or `null`.
+
+`state` is `prepared`, `dispatching`, `accepted`, `verifying`, `succeeded`,
+`failed`, or `uncertain`. `next_action` is `execute`, `reconcile`, or `null`.
+`error_code` is a machine-readable reason or `null`. `tasks` contains one
+entry per bound native task with `operation` (`start` or `shutdown`),
+`task_ref` (an opaque SHA-256 reference), and `state` (`accepted`, `running`,
+`succeeded`, or `failed`). The public object keeps native UPIDs and PVE
+principals private. The root-only CLI reports refused requests separately
+from job results.

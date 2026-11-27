@@ -1596,6 +1596,78 @@ def cmd_pve_native_inventory(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pve_native_power(args: argparse.Namespace) -> int:
+    from ..core.pve_native_install import InstallError, _locked
+    from ..core.pve_power import _installed_power_runtime
+    from ..executor.protocol import ERROR_CLASSES, MAX_MESSAGE_BYTES, PROTOCOL_VERSION
+
+    if os.geteuid() != 0:
+        raise CliError("Native PVE power commands require local root.", EXIT_INVALID)
+    command = args.power_command
+    if command == "plan":
+        params = {"vmid": args.vmid, "operation": args.operation}
+    elif command == "execute":
+        params = {"job_id": args.confirm, "continue_reboot": args.continue_reboot}
+    else:
+        params = {"job_id": args.job_id}
+        if command == "reconcile" and args.upid is not None:
+            params["upid"] = args.upid
+    frame = json.dumps({"v": PROTOCOL_VERSION, "action": f"pve_power_{command}", "params": params})
+    try:
+        with _locked():
+            _, _, python = _installed_power_runtime()
+    except (InstallError, OSError):
+        raise CliError(
+            "Could not verify the active signed native executor.", EXIT_UNAVAILABLE
+        ) from None
+    try:
+        response = subprocess.run(
+            [str(python), "-I", "-B", "-m", "steward.executor.pve_power"],
+            input=frame.encode(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            cwd="/",
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+            timeout=60,
+            check=False,
+        )
+        if response.returncode or len(response.stdout) > MAX_MESSAGE_BYTES:
+            raise ValueError
+        reply = json.loads(response.stdout)
+        if not isinstance(reply, dict):
+            raise ValueError
+        if reply.keys() == {"ok", "result"} and reply["ok"] is True:
+            result = reply["result"]
+            if not isinstance(result, dict) or result.get("schema_version") != 1:
+                raise ValueError
+        elif (
+            reply.keys() == {"ok", "error_class", "message"}
+            and reply["ok"] is False
+            and reply["error_class"] in ERROR_CLASSES
+            and isinstance(reply["message"], str)
+        ):
+            code = {
+                "bad_request": EXIT_INVALID,
+                "forbidden_role": EXIT_INVALID,
+                "unauthorized_peer": EXIT_INVALID,
+                "conflict": EXIT_CONFLICT,
+                "target_busy": EXIT_CONFLICT,
+                "unavailable": EXIT_UNAVAILABLE,
+            }.get(reply["error_class"], EXIT_FAILED)
+            raise CliError(reply["message"], code)
+        else:
+            raise ValueError
+    except (OSError, subprocess.SubprocessError, ValueError, RecursionError):
+        raise CliError(
+            "Could not read the native executor response. Use job status to check the dispatch.",
+            EXIT_UNAVAILABLE,
+        ) from None
+    say(json.dumps(result, indent=2))
+    if command != "status":
+        return {"failed": EXIT_FAILED, "uncertain": EXIT_DEGRADED}.get(result.get("state"), 0)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="opstend", description=__doc__.split("\n")[0])
     parser.add_argument("--version", action="version", version=__version__)
@@ -1774,6 +1846,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--vmid", type=int, help="show detail for one visible QEMU or LXC guest"
     )
     pve_inventory.set_defaults(func=cmd_pve_native_inventory)
+    pve_power = pve_sub.add_parser("power", help="plan and confirm a scoped native guest power job")
+    power_sub = pve_power.add_subparsers(dest="power_command", required=True)
+    power_plan = power_sub.add_parser("plan", help="observe a guest and create a confirmation")
+    power_plan.add_argument("--vmid", type=int, required=True)
+    power_plan.add_argument("--operation", choices=("start", "shutdown", "reboot"), required=True)
+    power_execute = power_sub.add_parser("execute", help="confirm the exact reviewed power job")
+    power_execute.add_argument("--confirm", metavar="JOB_ID", required=True)
+    power_execute.add_argument(
+        "--continue-reboot", action="store_true", help="continue after a verified graceful shutdown"
+    )
+    power_status = power_sub.add_parser("status", help="read the durable local job")
+    power_status.add_argument("--job-id", required=True)
+    power_reconcile = power_sub.add_parser("reconcile", help="verify a native task and guest state")
+    power_reconcile.add_argument("--job-id", required=True)
+    power_reconcile.add_argument("--upid", help="bind an exact native task after a lost reply")
+    pve_power.set_defaults(func=cmd_pve_native_power)
 
     release = sub.add_parser("release", help="release tooling")
     release_sub = release.add_subparsers(dest="release_command", required=True)
