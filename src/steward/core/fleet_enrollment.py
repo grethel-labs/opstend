@@ -37,7 +37,12 @@ from .fleet_identity import (
 from .fleet_policy import FleetTarget, _target_record
 from .pve_inventory_models import InventorySnapshot, Projection
 
-FleetCapability = Literal["heartbeat", "pve_inventory", "policy_target"]
+FleetCapability = Literal["heartbeat", "pve_inventory", "policy_target", "pve_power_target"]
+# SQL identifiers come exclusively from this fixed mapping.
+_TARGET_TABLES = {
+    "policy_target": ("fleet_policy_target_invitations", "fleet_policy_target_bindings"),
+    "pve_power_target": ("fleet_power_target_invitations", "fleet_power_target_bindings"),
+}
 
 
 class FleetEnrollmentConflict(FleetIdentityConflict):
@@ -131,16 +136,24 @@ def _authorize(db: sqlite3.Connection, fingerprint: str, capability: FleetCapabi
     if row is None:
         raise FleetEnrollmentConflict("client key has no current grant for this capability")
     target = None
-    if capability == "policy_target":
+    if capability in _TARGET_TABLES:
+        _, bindings = _TARGET_TABLES[capability]
         binding = db.execute(
-            """SELECT kind, target_id AS id, generation FROM fleet_policy_target_bindings
-               WHERE agent_id = ? AND grant_generation = ?""",
+            f"""SELECT kind, target_id AS id, generation FROM {bindings}
+               WHERE agent_id = ? AND grant_generation = ?""",  # noqa: S608
             (row["agent_id"], row["generation"]),
         ).fetchone()
         if binding is None:
             raise FleetEnrollmentConflict("client key has no current target binding")
         target = FleetTarget(**dict(binding))
-    return FleetGrant(**dict(row), target=target)
+    grant = FleetGrant(**dict(row), target=target)
+    if capability == "pve_power_target":
+        assert target is not None
+        if grant.route_id is None or grant.route_id != power_target_route(
+            db, target, grant.host_id
+        ):
+            raise FleetEnrollmentConflict("power target has no current confirmed route")
+    return grant
 
 
 def policy_target_grant(
@@ -151,6 +164,29 @@ def policy_target_grant(
     if grant.target != target:
         raise FleetEnrollmentConflict("client key has no current grant for this target")
     return grant
+
+
+def power_target_grant(db: sqlite3.Connection, fingerprint: str, target: FleetTarget) -> FleetGrant:
+    grant = _authorize(db, _fingerprint(fingerprint), "pve_power_target")
+    if grant.target != target:
+        raise FleetEnrollmentConflict("client key has no current grant for this target")
+    return grant
+
+
+def power_target_route(db: sqlite3.Connection, target: FleetTarget, host_id: str) -> str | None:
+    if target.kind != "pve_guest":
+        return None
+    route = db.execute(
+        """SELECT r.id FROM fleet_guests AS g
+           JOIN fleet_instances AS i ON i.id = g.instance_id AND i.kind = 'standalone'
+           JOIN fleet_routes AS r ON r.instance_id = i.id AND r.node = g.node
+           JOIN fleet_route_addresses AS a ON a.route_id = r.id
+           LEFT JOIN fleet_pve_adoptions AS d ON d.route_id = r.id
+           WHERE g.id = ? AND g.generation = ? AND r.host_id = ?
+             AND (d.status IS NULL OR d.status != 'detached')""",
+        (target.id, target.generation, host_id),
+    ).fetchone()
+    return route["id"] if route is not None else None
 
 
 def policy_target_bound(db: sqlite3.Connection, target: FleetTarget) -> bool:
@@ -181,20 +217,29 @@ def _policy_target_route(db: sqlite3.Connection, target: FleetTarget, host_id: s
     return route["id"] if route is not None else None
 
 
-def _require_policy_target(
-    db: sqlite3.Connection, target: FleetTarget, agent_id: str, host_id: str
-) -> None:
-    matches = (
-        target.id == host_id
-        if target.kind == "host"
-        else _policy_target_route(db, target, host_id) is not None
-    )
+def _require_target_binding(
+    db: sqlite3.Connection,
+    target: FleetTarget,
+    agent_id: str,
+    host_id: str,
+    capability: FleetCapability,
+) -> str | None:
+    route = None
+    if capability == "pve_power_target":
+        route = power_target_route(db, target, host_id)
+        record = _target_record(db, target)
+        matches = route is not None and record is not None and record["available"]
+    elif target.kind == "host":
+        matches = target.id == host_id
+    else:
+        matches = _policy_target_route(db, target, host_id) is not None
     if not matches:
         raise FleetEnrollmentConflict("target does not belong to the agent's registered host")
+    _, bindings = _TARGET_TABLES[capability]
     other = db.execute(
-        """SELECT 1 FROM fleet_policy_target_bindings AS b
+        f"""SELECT 1 FROM {bindings} AS b
            WHERE (b.agent_id = ? AND (b.kind, b.target_id, b.generation) != (?, ?, ?))
-              OR ((b.kind, b.target_id, b.generation) = (?, ?, ?) AND b.agent_id != ?)""",
+              OR ((b.kind, b.target_id, b.generation) = (?, ?, ?) AND b.agent_id != ?)""",  # noqa: S608
         (
             agent_id,
             target.kind,
@@ -208,6 +253,22 @@ def _require_policy_target(
     ).fetchone()
     if other is not None:
         raise FleetEnrollmentConflict("target and agent already have an authoritative binding")
+    return route
+
+
+def _require_separate_power_agent(
+    db: sqlite3.Connection, agent_id: str, capability: FleetCapability
+) -> None:
+    previous = db.execute(
+        "SELECT 1 FROM fleet_agent_grants WHERE agent_id = ?", (agent_id,)
+    ).fetchone()
+    power_agent = db.execute(
+        "SELECT 1 FROM fleet_power_target_bindings WHERE agent_id = ?", (agent_id,)
+    ).fetchone()
+    if (power_agent and capability != "pve_power_target") or (
+        capability == "pve_power_target" and previous is not None and not power_agent
+    ):
+        raise FleetEnrollmentConflict("power targets require a separate agent")
 
 
 def policy_target_active(db: sqlite3.Connection, target: FleetTarget, host_id: str) -> bool:
@@ -259,9 +320,9 @@ class FleetEnrollment:
         if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 900:
             raise FleetEnrollmentConflict("invitation lifetime must be between 1 and 900 seconds")
         if (
-            capability not in ("heartbeat", "pve_inventory", "policy_target")
+            capability not in ("heartbeat", "pve_inventory", *_TARGET_TABLES)
             or (route_id is not None) != (capability == "pve_inventory")
-            or (target is not None) != (capability == "policy_target")
+            or (target is not None) != (capability in _TARGET_TABLES)
             or (target is not None and not isinstance(target, FleetTarget))
         ):
             raise FleetEnrollmentConflict("invitation requires one capability with its exact scope")
@@ -273,6 +334,7 @@ class FleetEnrollment:
             expires_at = issued.astimezone(UTC) + timedelta(seconds=ttl_seconds)
             agent = _current_agent(db, agent_id, expected_generation)
             _unused_key(db, fingerprint)
+            _require_separate_power_agent(db, agent_id, capability)
             if (
                 route_id is not None
                 and db.execute(
@@ -288,12 +350,15 @@ class FleetEnrollment:
             _require_rejoin_agent(db, route_id, agent_id)
             db.execute("DELETE FROM fleet_invitations WHERE expires_at <= ?", (timestamp,))
             if target is not None:
-                _require_policy_target(db, target, agent_id, agent["host_id"])
+                route_id = _require_target_binding(
+                    db, target, agent_id, agent["host_id"], capability
+                )
+                invitations, _ = _TARGET_TABLES[capability]
                 waiting = db.execute(
-                    """SELECT 1 FROM fleet_policy_target_invitations AS b
+                    f"""SELECT 1 FROM {invitations} AS b
                        JOIN fleet_invitations AS i ON i.token_hash = b.token_hash
                        WHERE b.kind = ? AND b.target_id = ? AND b.generation = ?
-                         AND i.agent_id != ?""",
+                         AND i.agent_id != ?""",  # noqa: S608
                     (target.kind, target.id, target.generation, agent_id),
                 ).fetchone()
                 if waiting is not None:
@@ -314,7 +379,7 @@ class FleetEnrollment:
             )
             if target is not None:
                 db.execute(
-                    "INSERT INTO fleet_policy_target_invitations VALUES (?, ?, ?, ?)",
+                    f"INSERT INTO {invitations} VALUES (?, ?, ?, ?)",  # noqa: S608
                     (token_hash, target.kind, target.id, target.generation),
                 )
         return IssuedInvitation(token=SecretStr(token), expires_at=expires_at)
@@ -345,16 +410,23 @@ class FleetEnrollment:
             _unused_key(db, fingerprint)
             _require_rejoin_agent(db, invite["route_id"], agent_id)
             target = None
-            if invite["capability"] == "policy_target":
+            capability = invite["capability"]
+            _require_separate_power_agent(db, agent_id, capability)
+            if capability in _TARGET_TABLES:
+                invitations, bindings = _TARGET_TABLES[capability]
                 binding = db.execute(
-                    """SELECT kind, target_id AS id, generation FROM fleet_policy_target_invitations
-                       WHERE token_hash = ?""",
+                    f"""SELECT kind, target_id AS id, generation FROM {invitations}
+                       WHERE token_hash = ?""",  # noqa: S608
                     (token_hash,),
                 ).fetchone()
                 if binding is None:
                     raise FleetEnrollmentConflict("invitation has no target binding")
                 target = FleetTarget(**dict(binding))
-                _require_policy_target(db, target, agent_id, agent["host_id"])
+                route_id = _require_target_binding(
+                    db, target, agent_id, agent["host_id"], capability
+                )
+                if route_id != invite["route_id"]:
+                    raise FleetEnrollmentConflict("target binding route changed")
             generation = agent["generation"] + 1
             db.execute("INSERT INTO fleet_enrolled_keys VALUES (?)", (fingerprint,))
             _advance(
@@ -362,9 +434,9 @@ class FleetEnrollment:
             )
             if target is not None:
                 db.execute(
-                    """INSERT INTO fleet_policy_target_bindings VALUES (?, ?, ?, ?, ?)
+                    f"""INSERT INTO {bindings} VALUES (?, ?, ?, ?, ?)
                        ON CONFLICT(agent_id) DO UPDATE
-                       SET grant_generation = excluded.grant_generation""",
+                       SET grant_generation = excluded.grant_generation""",  # noqa: S608
                     (agent_id, generation, target.kind, target.id, target.generation),
                 )
             grant = _authorize(db, fingerprint, invite["capability"])

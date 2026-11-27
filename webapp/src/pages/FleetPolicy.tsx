@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { FleetCommandsPanel } from "./FleetCommands";
 import type { PageProps } from "../App";
 import { api, ApiError, type FleetPolicyApproval, type FleetPolicyHead, type FleetPolicyPlan, type FleetTarget } from "../api";
 
@@ -268,6 +269,7 @@ export function FleetPolicyPage({ onAuthLost }: PageProps) {
             })}>Stage rollback revision</button>
         </section>
       )}
+      <FleetCommandsPanel onAuthLost={onAuthLost} />
     </>
   );
 }

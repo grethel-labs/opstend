@@ -324,7 +324,41 @@ export interface FleetPolicyApproval {
   }>;
 }
 
+interface FleetPowerGuest {
+  target: FleetTarget;
+  name: string | null;
+  instance_id: string;
+  node: string;
+  kind: "qemu" | "lxc";
+  vmid: number;
+}
+
+export interface FleetCommandTarget extends FleetPowerGuest {
+  policy_revision: string;
+}
+
+export interface FleetCommand extends FleetPowerGuest {
+  command_id: string;
+  action: "start";
+  subject: string;
+  role: "operator";
+  policy_revision: string;
+  expires_at: string;
+  state: "preparing" | "review" | "queued" | "released" | "accepted" | "uncertain" |
+    "succeeded" | "failed" | "refused" | "expired";
+  digest: string | null;
+  reason: string | null;
+  observed_state: "running" | "stopped" | null;
+  task_ref: string | null;
+}
+
+export interface FleetCommands {
+  targets: FleetCommandTarget[];
+  commands: FleetCommand[];
+}
+
 const FLEET_POLICY = "/api/fleet/policy";
+const FLEET_COMMANDS = "/api/fleet/commands";
 
 export const api = {
   login: (token: string) => request<{ csrf: string }>("POST", "/api/login", { token }),
@@ -343,6 +377,15 @@ export const api = {
     request<FleetPolicyApproval>("GET", `${FLEET_POLICY}/approvals/${encodeURIComponent(id)}`),
   rollbackFleetPolicy: (revision: string, parent: string) =>
     request<FleetPolicyRevision>("POST", `${FLEET_POLICY}/rollback`, { revision, parent }),
+  fleetCommands: () => request<FleetCommands>("GET", FLEET_COMMANDS),
+  previewFleetCommand: (target: FleetTarget, policy_revision: string, key: string) =>
+    request<FleetCommand>("POST", `${FLEET_COMMANDS}/preview`,
+      { target, policy_revision, action: "start" }, { "Idempotency-Key": key }),
+  approveFleetCommand: (id: string, digest: string, key: string) =>
+    request<FleetCommand>("POST", `${FLEET_COMMANDS}/${encodeURIComponent(id)}/approve`,
+      { digest }, { "Idempotency-Key": key }),
+  fleetCommand: (id: string) =>
+    request<FleetCommand>("GET", `${FLEET_COMMANDS}/${encodeURIComponent(id)}`),
   backups: () => request<BackupsResponse>("GET", "/api/backups"),
   status: (live = false) => request<StatusResponse>("GET", `/api/status${live ? "?live=true" : ""}`),
   advice: () => request<{ enabled: boolean }>("GET", "/api/advice"),

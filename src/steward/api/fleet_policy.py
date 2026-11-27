@@ -85,7 +85,13 @@ def _reject_constant(_: str) -> NoReturn:
     raise ValueError("invalid JSON constant")
 
 
-async def _body[Body: Projection](request: Request, model: type[Body], limit: int) -> Body:
+async def _body[Body: Projection](
+    request: Request,
+    model: type[Body],
+    limit: int,
+    *,
+    invalid_detail: str = "invalid fleet policy request",
+) -> Body:
     data = bytearray()
     async for chunk in request.stream():
         if len(data) + len(chunk) > limit:
@@ -97,7 +103,7 @@ async def _body[Body: Projection](request: Request, model: type[Body], limit: in
         )
         return model.model_validate_json(data)
     except (ValueError, RecursionError):
-        raise HTTPException(422, "invalid fleet policy request") from None
+        raise HTTPException(422, invalid_detail) from None
 
 
 def _identifier(value: str, adapter: TypeAdapter[str]) -> str:

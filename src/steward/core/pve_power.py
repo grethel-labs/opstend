@@ -159,6 +159,7 @@ class JobRecord(_VersionedProjection):
     next_action: Literal["execute", "reconcile"] | None = None
     error_code: ErrorCode | None = None
     legs: tuple[PowerLeg, ...] = Field(default=(), max_length=2, repr=False)
+    fleet_origin: Digest | None = Field(default=None, repr=False)
 
     @field_validator("created_at", "expires_at", "updated_at")
     @classmethod
@@ -174,6 +175,8 @@ class JobRecord(_VersionedProjection):
             raise ValueError("invalid power leg sequence")
         if self.state == "prepared" and self.legs:
             raise ValueError("prepared job has a dispatch intent")
+        if self.fleet_origin is not None and self.operation != "start":
+            raise ValueError("fleet origin requires a native start job")
         return self
 
     @property
@@ -239,6 +242,7 @@ _PLAN_FIELDS = {
     "observation",
     "created_at",
     "expires_at",
+    "fleet_origin",
     "source",
     "destination",
     "name",
@@ -359,7 +363,13 @@ class PowerJournal:
             # The write lock covers both the comparison and the constraint checks.
             connection.execute("BEGIN IMMEDIATE")
             self._initialize(connection)
-            record_json = record.model_dump_json()
+            # Keep local jobs readable by prior signed PX03 packages.
+            exclude = (
+                {"fleet_origin"}
+                if isinstance(record, JobRecord) and record.fleet_origin is None
+                else None
+            )
+            record_json = record.model_dump_json(exclude=exclude)
             record = JOURNAL_RECORD_ADAPTER.validate_json(record_json)
             if self._get(connection, record.job_id) != previous:
                 raise PowerJournalError("journal_conflict")

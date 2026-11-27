@@ -375,7 +375,66 @@ erneuern, wenn sich der Stand geändert hat oder die Freigabe abgelaufen
 ist. Eine neue Revision oder ein Widerruf wirkt bei der nächsten Prüfung
 für eine Übernahme. Bereits bestätigte Ergebnisse bleiben erhalten.
 
-## Sequenz für einen Gast-Neustart
+### Registrierten Gast starten (FL03.1)
+
+Unter **Guest power** wählt der Operator einen registrierten QEMU- oder
+LXC-Gast einer eigenständigen PVE-Instanz. Die Auswahl zeigt die Instanz
+und den Knoten. Nach **Preview guest start** ermittelt der native
+Executor den aktuellen Zustand. Die Vorschau zeigt Gastgeneration,
+angewandte Richtlinienrevision, beobachteten Zustand und Ablauf. Erst
+**Approve guest start** erlaubt dem Koordinator, den geprüften Auftrag
+an den gebundenen Executor zu liefern. Die Auftragsansicht bleibt nach
+Neuladen verfügbar. Sie meldet Erfolg, wenn der zugehörige native Task
+abgeschlossen ist und PVE den Gast als laufend bestätigt.
+
+Der Browser-Principal braucht Schreibzugriff auf die Gastgeneration und
+die Rolle `operator` in der wirksamen, angewandten Richtlinie. Er muss
+auch im lokalen Rollenlimit des Ziels stehen. Die native Installation
+braucht ihre übliche PX03-Registrierung für `start` und einen dedizierten
+Schreib-Token. Die FL02-Richtlinie für denselben Gast wird im privaten
+Zielregister `/var/lib/opstend-pve-executor/fleet-policy.sqlite3`
+angewandt. FL02 nutzt weiterhin ihren eigenen `policy_target`-Agenten.
+Inventarsammlung und FL02-Zielmeldung müssen für eine neue Vorschau
+aktuell sein. Der Koordinator verwendet jeweils eine Frist von fünf
+Minuten.
+
+Für die Befehlsausführung registriert der Koordinator einen weiteren
+Agenten auf dem bestätigten Host. Die Einladung bindet den lokal
+erzeugten Client-Schlüssel mit `pve_power_target` an exakt den Gast in
+`target.json`. Nach dem Enrollment stehen `agent_id` und
+`generation` im Grant. Die Power-Client-Dateien
+`fleet-client.crt`, `fleet-client.key` und `fleet-controller-ca.crt` sowie
+`fleet-power.json` liegen im lokalen Executor-Verzeichnis. Die Dateien
+gehören root und haben Modus `0600`, das Verzeichnis hat Modus `0700`.
+`fleet-power.json` enthält `controller_url` als privaten HTTPS-Endpunkt
+sowie `agent_id` und `enrollment_generation` mit den beiden Grant-Werten.
+
+```sh
+opstend fleet issue-invite --db "$db" --agent-id "$power_agent" \
+  --capability pve_power_target --target target.json \
+  --key-fingerprint "$client_spki" --invite-out power.invite
+
+# Auf dem Ziel nach dem Enrollment in einem regelmäßigen lokalen Service.
+opstend fleet command-target-sync
+
+# Auf dem Koordinator. Die lokale CLI verwendet den Principal local-coordinator.
+opstend fleet command-preview --db "$db" --target target.json \
+  --policy-revision "$revision" --action start --idempotency-key "$preview_key"
+opstend fleet command-status --db "$db" --command-id "$command"
+opstend fleet command-approve --db "$db" --command-id "$command" \
+  --digest "$digest" --idempotency-key "$approval_key"
+```
+
+`command-target-sync` führt je Aufruf einen Abruf und die zugehörige
+Meldung über den verifizierten, signierten PX03-Executor aus. Bis zum
+nächsten Abruf bleibt ein freigegebener Auftrag ausstehend. Ein
+abgelaufener oder durch neue Richtlinie bzw. Enrollment-Generation
+überholter Auftrag kann keine neue Ausführung beginnen. Nach einem
+unklaren Versand bleibt der Auftrag für den Readback vorgemerkt. Eine
+Schlüsselrotation lässt bereits erfasste Arbeit für denselben Agenten
+nachvollziehen.
+
+## Sequenz für koordinierte Gastaktionen
 
 1. Der Operator erhält Inventar und tatsächliche Capability für genau den
    sichtbaren Gast. Ein aktiver PVE-HA-Writer geht über PH02.

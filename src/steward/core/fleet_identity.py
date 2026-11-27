@@ -157,6 +157,34 @@ CREATE TABLE IF NOT EXISTS fleet_policy_target_bindings (
     kind TEXT NOT NULL, target_id TEXT NOT NULL, generation INTEGER NOT NULL,
     UNIQUE (kind, target_id, generation)
 );
+CREATE TABLE IF NOT EXISTS fleet_power_target_invitations (
+    token_hash TEXT PRIMARY KEY REFERENCES fleet_invitations(token_hash) ON DELETE CASCADE,
+    kind TEXT NOT NULL, target_id TEXT NOT NULL, generation INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS fleet_power_target_bindings (
+    agent_id TEXT PRIMARY KEY REFERENCES fleet_agent_grants(agent_id),
+    grant_generation INTEGER NOT NULL,
+    kind TEXT NOT NULL, target_id TEXT NOT NULL, generation INTEGER NOT NULL,
+    UNIQUE (kind, target_id, generation)
+);
+CREATE TABLE IF NOT EXISTS fleet_power_commands (
+    id TEXT PRIMARY KEY, target_id TEXT NOT NULL, generation INTEGER NOT NULL,
+    instance_id TEXT NOT NULL, vmid INTEGER NOT NULL, subject TEXT NOT NULL,
+    source TEXT NOT NULL, coordinator INTEGER NOT NULL, request_key TEXT NOT NULL,
+    spec TEXT NOT NULL, expires_at TEXT NOT NULL, name TEXT, state TEXT NOT NULL,
+    digest TEXT, native_digest TEXT,
+    approval_key TEXT,
+    claim_id TEXT, claim_generation INTEGER, claim_until TEXT, report TEXT,
+    task_ref TEXT, observed_state TEXT, reason TEXT,
+    UNIQUE (subject, source, request_key), UNIQUE (subject, source, approval_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS fleet_power_slot
+    ON fleet_power_commands(instance_id, vmid)
+    WHERE state IN ('preparing', 'review', 'queued', 'released', 'accepted', 'uncertain');
+CREATE INDEX IF NOT EXISTS fleet_power_command_target
+    ON fleet_power_commands(target_id, generation);
+CREATE INDEX IF NOT EXISTS fleet_power_command_subject
+    ON fleet_power_commands(subject, source);
 CREATE TABLE IF NOT EXISTS fleet_observations (
     id TEXT PRIMARY KEY, instance_id TEXT NOT NULL REFERENCES fleet_instances(id),
     route_id TEXT NOT NULL REFERENCES fleet_routes(id), observed_at TEXT NOT NULL,
