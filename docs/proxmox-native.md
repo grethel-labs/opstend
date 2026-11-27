@@ -116,6 +116,63 @@ group, or shadow database, the installer pauses for the operator to reconcile
 the account. Preflight and plan can run before an archive is available.
 See [STATUS](STATUS.md) for recorded host acceptance.
 
+## Upgrade and rollback
+
+Use the root-owned bootstrap environment. Stage the newer signed archive and
+its own offline wheelhouse using the installation procedure. The upgrade uses
+the recorded profile and credential paths and verifies the archive with the
+same release signing key that the installation recorded.
+
+```sh
+/opt/admin/opstend-bootstrap/bin/python -I -m steward.cli.main pve-native upgrade \
+  --release-archive /root/opstend-inputs/next/opstend-release.tar.gz \
+  --release-public-key /root/opstend-inputs/release-key.pub \
+  --wheelhouse /root/opstend-inputs/next/wheels
+```
+
+The upgrade installs into a separate version directory, stops the native
+services briefly, switches the release pointer and waits for the services to
+report readiness. It preserves the installed units and configuration. An
+exact repeat of the active signed release reports `changed=0`. To resume an
+interrupted upgrade, repeat the same command with the same signed inputs.
+
+If the new release fails activation, the upgrade reports failure and attempts
+to restore the previous verified release. Use `rollback` with the previous
+version from your installation record to restore it explicitly or retry an
+interrupted restoration. Rollback changes the active code and preserves the
+native data directory. If an explicit rollback target fails readiness, the
+host attempts to restore the release that was active before that rollback.
+
+```sh
+/opt/admin/opstend-bootstrap/bin/python -I -m steward.cli.main pve-native rollback \
+  --to 0.1.0rc1
+```
+
+## Remove the native installation
+
+Use the bootstrap environment as root for the removal plan and apply. The
+plan shows the owned unit files, enablement links and installed releases,
+along with the data, service identities and operator credential paths to
+retain. Planning and removal work with the PVE API or credentials unavailable,
+including after an interrupted upgrade.
+
+```sh
+/opt/admin/opstend-bootstrap/bin/python -I -m steward.cli.main pve-native remove --plan
+/opt/admin/opstend-bootstrap/bin/python -I -m steward.cli.main pve-native remove \
+  --export-config /root/opstend-pve-config.json
+```
+
+Omit `--export-config` if you have no need for an export. To export, choose a
+new absolute filename under a root-controlled directory. The private JSON
+contains the profile configuration and references to credential files. Repeat
+the removal with the same options after an interruption.
+
+Removal stops and removes the native services and package files. It retains
+the native state under `/var/lib/opstend-pve`, the service identities, a
+root-only removal record under `/etc/opstend-pve`, and the operator-held
+credentials. To revoke PVE access, remove the dedicated token in Proxmox VE
+using the operator account. [PVE user and token management](https://github.com/proxmox/pve-docs/blob/master/pveum.adoc)
+
 ## Read status
 
 On the node, use the installed CLI with root's existing operating system
