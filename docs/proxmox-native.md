@@ -1,4 +1,4 @@
-# Native OpsTend preflight on Proxmox VE
+# Native OpsTend on Proxmox VE
 
 The first native profile targets **Proxmox VE 9.3 with `pve-manager 9.3.1` on
 Debian 13 amd64** for lab qualification. The installed package and the API
@@ -43,7 +43,7 @@ it needs 2 GiB available. The installation, state, configuration, and systemd
 unit locations must be on writable filesystems. The passive port check treats
 an IPv6 wildcard listener as a possible conflict with the standalone port.
 
-## Prospective installation
+## Installation
 
 Both modes use `/opt/opstend-pve` for installed files, `/etc/opstend-pve` for
 configuration, and `/var/lib/opstend-pve` for state. Both run the
@@ -53,7 +53,87 @@ to the local PVE API on port 8006.
 | Mode | Services and listeners |
 |---|---|
 | `agent` | Agent service with zero inbound listeners. |
-| `standalone` | Agent service plus `opstend-pve-ui.service` as `opstend-pve-ui`, with an authenticated UI planned on `127.0.0.1:8447`. |
+| `standalone` | Agent service plus `opstend-pve-ui.service` as `opstend-pve-ui`, serving authenticated HTTPS on `127.0.0.1:8447`. |
 
-Native installation in PX01 step 2 requires a verified signed archive. The
-preflight and plan can run before an archive is available.
+The operator provides the node's Debian CPython and its working `venv` module
+(`python3` and `python3-venv`). Use a separately trusted, root-owned bootstrap
+environment containing the native installer and its dependencies. The examples
+assume you are already root and the bootstrap environment is at
+`/opt/admin/opstend-bootstrap`. Use its Python directly in isolated mode.
+
+Obtain the Ed25519 release verification key through an independent trusted
+channel. Verify the exact signed archive with that key before staging the
+bundle and dependencies. Build an offline wheelhouse from the verified
+archive's `requirements.txt` on a compatible Debian amd64 system with the
+same CPython version as the node. Use an empty wheelhouse directory and
+download one compatible wheel per signed pin. The installer verifies the
+release signature and wheel hashes and installs using the local wheelhouse.
+[Signed release verification](release.md#build-pack-sign-verify)
+
+```sh
+/opt/admin/opstend-bootstrap/bin/python -I -m steward.cli.main release verify \
+  /root/opstend-inputs/opstend-release.tar.gz \
+  --public-key /root/opstend-inputs/release-key.pub
+# On the matching staging system, after verifying and unpacking the archive
+python3 -m pip download --require-hashes --only-binary=:all: \
+  --dest /path/to/empty-wheelhouse -r /path/to/verified/requirements.txt
+```
+
+Stage the archive, verification key, wheelhouse and credentials under
+root-owned directories protected from writes by other users. Put the PVE
+token and the standalone admin token and TLS private key in individual
+root-owned regular files with mode `0400` or `0600`. Use absolute paths
+consisting of letters, digits, underscores, periods, hyphens and slashes.
+Systemd supplies credentials only to the service that needs them. Preserve
+the credential files at the supplied paths for subsequent starts. When you
+replace a credential at the same path, restart the unit that uses it to load
+the replacement.
+
+Run the installer as root. For agent-only installation use `--mode agent`
+and omit all three standalone options at the end. For standalone, supply a
+random, independent admin token of 32 to 128 ASCII letters, digits, underscores
+or hyphens on one line. Supply a separate PEM TLS certificate whose IP SAN
+includes `127.0.0.1`, and its matching unencrypted PEM private key. Make its
+trust anchor available to the browser through your trusted channel.
+
+```sh
+/opt/admin/opstend-bootstrap/bin/python -I -m steward.cli.main pve-native install \
+  --mode standalone --api-name pve.example.net \
+  --ca-file /root/opstend-inputs/pve-ca.pem \
+  --token-file /root/opstend-inputs/pve-token \
+  --release-archive /root/opstend-inputs/opstend-release.tar.gz \
+  --release-public-key /root/opstend-inputs/release-key.pub \
+  --wheelhouse /root/opstend-inputs/wheels \
+  --admin-token-file /root/opstend-inputs/admin-token \
+  --ui-cert-file /root/opstend-inputs/ui-cert.pem \
+  --ui-key-file /root/opstend-inputs/ui-key.pem
+```
+
+Repeat the exact invocation with the same inputs to verify an unchanged
+installation (`changed=0`) or resume an interrupted install. If a host or
+`useradd` failure leaves only part of a reserved OS account in the password,
+group, or shadow database, the installer pauses for the operator to reconcile
+the account. Preflight and plan can run before an archive is available.
+See [STATUS](STATUS.md) for recorded host acceptance.
+
+## Read status
+
+On the node, use the installed CLI with root's existing operating system
+authentication.
+
+```sh
+/opt/opstend-pve/current/venv/bin/python -I -B -m steward.cli.main pve-native status
+```
+
+For the standalone UI, browse to `https://127.0.0.1:8447/` on the node or
+open an SSH local forward from your workstation and use the same URL there.
+Sign in as `admin` with the independent admin token when prompted by the
+browser. The status JSON is also available at `/status` after authentication.
+
+```sh
+ssh -N -L 127.0.0.1:8447:127.0.0.1:8447 operator@pve.example.net
+```
+
+Status reports the latest local TLS, token permission and API version
+checks and their observation timestamp. An observation becomes stale after
+90 seconds or a reboot. Missing or unreadable observations are unavailable.

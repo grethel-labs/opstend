@@ -1521,6 +1521,43 @@ def cmd_pve_native(args: argparse.Namespace) -> int:
     return 0 if result["ready"] else EXIT_UNAVAILABLE
 
 
+def cmd_pve_native_install(args: argparse.Namespace) -> int:
+    from ..core.pve_native_install import InstallError, install
+
+    try:
+        result = install(
+            mode=args.mode,
+            api_name=args.api_name,
+            ca_file=args.ca_file,
+            token_file=args.token_file,
+            release_archive=args.release_archive,
+            release_public_key=args.release_public_key,
+            wheelhouse=args.wheelhouse,
+            admin_token_file=args.admin_token_file,
+            ui_cert_file=args.ui_cert_file,
+            ui_key_file=args.ui_key_file,
+        )
+    except ValueError as exc:
+        raise CliError(str(exc), EXIT_INVALID) from None
+    except InstallError as exc:
+        raise CliError(str(exc), EXIT_UNAVAILABLE) from None
+    say(json.dumps(result, indent=2))
+    return 0
+
+
+def cmd_pve_native_status(_args: argparse.Namespace) -> int:
+    from ..pve_native_runtime import read_status
+
+    try:
+        result = read_status()
+    except ValueError as exc:
+        raise CliError(str(exc), EXIT_INVALID) from None
+    except OSError:
+        raise CliError("Could not read native PVE status.", EXIT_UNAVAILABLE) from None
+    say(json.dumps(result, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="opstend", description=__doc__.split("\n")[0])
     parser.add_argument("--version", action="version", version=__version__)
@@ -1653,18 +1690,33 @@ def build_parser() -> argparse.ArgumentParser:
     token.add_argument("--force", action="store_true", help="rotate an existing token")
     token.set_defaults(func=cmd_init_token)
 
-    pve = sub.add_parser("pve-native", help=f"inspect the local Proxmox VE host ({PROFILE})")
+    pve = sub.add_parser(
+        "pve-native", help=f"inspect or install on the local Proxmox VE host ({PROFILE})"
+    )
     pve_sub = pve.add_subparsers(dest="pve_command", required=True)
     for name, help_text in (
         ("preflight", "check compatibility and readiness for the native profile"),
         ("plan", "check readiness and show the prospective native installation"),
+        ("install", "install the signed native profile as root"),
     ):
         command = pve_sub.add_parser(name, help=help_text)
         command.add_argument("--mode", required=True, choices=MODES)
         command.add_argument("--api-name", required=True, help="TLS name on the PVE certificate")
         command.add_argument("--ca-file", required=True, type=Path, help="trusted PVE CA file")
         command.add_argument("--token-file", required=True, type=Path, help="0600 PVE token file")
-        command.set_defaults(func=cmd_pve_native)
+        if name == "install":
+            command.add_argument("--release-archive", required=True, type=Path)
+            command.add_argument("--release-public-key", required=True, type=Path)
+            command.add_argument("--wheelhouse", required=True, type=Path)
+            command.add_argument("--admin-token-file", type=Path)
+            command.add_argument("--ui-cert-file", type=Path)
+            command.add_argument("--ui-key-file", type=Path)
+            command.set_defaults(func=cmd_pve_native_install)
+        else:
+            command.set_defaults(func=cmd_pve_native)
+    pve_sub.add_parser("status", help="read the local native snapshot as root").set_defaults(
+        func=cmd_pve_native_status
+    )
 
     release = sub.add_parser("release", help="release tooling")
     release_sub = release.add_subparsers(dest="release_command", required=True)

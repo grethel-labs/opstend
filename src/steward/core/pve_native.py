@@ -190,7 +190,12 @@ def _exists(path: Path) -> bool:
     return True
 
 
-def _conflicts() -> dict:
+def _conflicts(
+    *,
+    owned_paths: frozenset[Path] = frozenset(),
+    owned_units: frozenset[str] = frozenset(),
+    owned_identities: frozenset[str] = frozenset(),
+) -> dict:
     # The full native namespace is reserved in either mode.
     names = [_AGENT, _UI]
     units = [service["unit"] for service in install_plan("standalone")["services"]]
@@ -198,7 +203,7 @@ def _conflicts() -> dict:
     for unit in units:
         paths.extend((str(_UNIT_DIR / unit), str(_UNIT_DIR / f"{unit}.d")))
     for path in paths:
-        if _exists(Path(path)):
+        if Path(path) not in owned_paths and _exists(Path(path)):
             return _finding(False, f"Reserved or conflicting installation path exists ({path}).")
 
     packages = _run(["/usr/bin/dpkg-query", "--show", f"--showformat={_DPKG_FORMAT}"])
@@ -223,11 +228,13 @@ def _conflicts() -> dict:
         unit_names = (
             line.split(maxsplit=1)[0] for line in result.stdout.splitlines() if line.strip()
         )
-        if any(name.startswith(prefixes) for name in unit_names):
+        if any(name.startswith(prefixes) and name not in owned_units for name in unit_names):
             return _finding(False, "A systemd unit occupies the Steward or OpsTend namespace.")
 
     for database in ("passwd", "group"):
         for name in names:
+            if name in owned_identities:
+                continue
             result = _run(["/usr/bin/getent", database, name])
             if result.returncode == 0:
                 return _finding(False, f"A reserved service identity already exists ({name}).")
@@ -236,15 +243,17 @@ def _conflicts() -> dict:
     return _finding(True, "Reserved paths, packages, units and service identities are available.")
 
 
-def _socket_conflict() -> bool:
+def _listener_inodes() -> set[str]:
     # Linux renders each 32-bit word in the hex address in native byte order.
+    matches = set()
     target = ipaddress.IPv4Address(UI_HOST)
     for name, width in (("tcp", 4), ("tcp6", 16)):
         with Path(f"/proc/net/{name}").open(encoding="ascii") as handle:
             if "local_address" not in next(handle, "").split():
                 raise ValueError("Could not inspect local TCP sockets.")
             for line in handle:
-                _, local, _, state, *_ = line.split()
+                fields = line.split()
+                local, state, inode = fields[1], fields[3], fields[9]
                 address, port = local.split(":")
                 if int(port, 16) != UI_PORT or state != "0A":
                     continue
@@ -258,8 +267,12 @@ def _socket_conflict() -> bool:
                 # The passive tables omit IPV6_V6ONLY. Reserve wildcard IPv6
                 # listeners too, as a dual-stack socket could own the IPv4 port.
                 if ip.is_unspecified or ip == target:
-                    return True
-    return False
+                    matches.add(inode)
+    return matches
+
+
+def _socket_conflict() -> bool:
+    return bool(_listener_inodes())
 
 
 def _listener(mode: str) -> dict:
@@ -386,7 +399,15 @@ def _check(probe, failure: str) -> dict:
         return _finding(False, failure)
 
 
-def collect_preflight(*, mode: str, api_name: str, ca_file: Path, token_file: Path) -> dict:
+def collect_preflight(
+    *,
+    mode: str,
+    api_name: str,
+    ca_file: Path,
+    token_file: Path,
+    _conflict_probe=None,
+    _listener_probe=None,
+) -> dict:
     install_plan(mode)
     _validate_api_name(api_name)
     if not ca_file.is_absolute() or not token_file.is_absolute():
@@ -396,8 +417,13 @@ def collect_preflight(*, mode: str, api_name: str, ca_file: Path, token_file: Pa
         "host": _check(_host, "Could not inspect the operating system and architecture."),
         "package": _check(_package, "Could not inspect pve-manager with dpkg-query."),
         "resources": _check(_resources, "Could not inspect CPU, memory or disk space."),
-        "conflicts": _check(_conflicts, "Could not inspect paths, packages, units or accounts."),
-        "listener": _check(lambda: _listener(mode), "Could not inspect local TCP socket tables."),
+        "conflicts": _check(
+            _conflict_probe or _conflicts, "Could not inspect paths, packages, units or accounts."
+        ),
+        "listener": _check(
+            _listener_probe or (lambda: _listener(mode)),
+            "Could not inspect local TCP socket tables.",
+        ),
     }
     compatible = findings["host"]["ok"] and findings["package"]["ok"]
     findings.update(_probe_api(api_name, ca_file, token, compatible))
