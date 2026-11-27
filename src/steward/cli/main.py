@@ -34,6 +34,7 @@ from .. import release as release_tools
 from ..core import canonical, render
 from ..core.ai_auth import AUTH_METHODS
 from ..core.config import Config, ConfigError, effective, load_config_file, parse_config
+from ..core.pve_native import MODES, PROFILE, PreflightError, collect_preflight, install_plan
 from ..core.retirement import retirement_lines
 from ..core.secrets import (
     SecretError,
@@ -1504,6 +1505,22 @@ def cmd_ai(args: argparse.Namespace) -> int:
     return ai_login.run(cfg, args.ai_action, args.method, relogin=args.relogin)
 
 
+def cmd_pve_native(args: argparse.Namespace) -> int:
+    try:
+        result = collect_preflight(
+            mode=args.mode,
+            api_name=args.api_name,
+            ca_file=args.ca_file,
+            token_file=args.token_file,
+        )
+    except PreflightError as exc:
+        raise CliError(str(exc), EXIT_INVALID) from None
+    if args.pve_command == "plan":
+        result["install_plan"] = install_plan(args.mode)
+    say(json.dumps(result, indent=2))
+    return 0 if result["ready"] else EXIT_UNAVAILABLE
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="opstend", description=__doc__.split("\n")[0])
     parser.add_argument("--version", action="version", version=__version__)
@@ -1635,6 +1652,19 @@ def build_parser() -> argparse.ArgumentParser:
     token.add_argument("--config", required=True)
     token.add_argument("--force", action="store_true", help="rotate an existing token")
     token.set_defaults(func=cmd_init_token)
+
+    pve = sub.add_parser("pve-native", help=f"inspect the local Proxmox VE host ({PROFILE})")
+    pve_sub = pve.add_subparsers(dest="pve_command", required=True)
+    for name, help_text in (
+        ("preflight", "check compatibility and readiness for the native profile"),
+        ("plan", "check readiness and show the prospective native installation"),
+    ):
+        command = pve_sub.add_parser(name, help=help_text)
+        command.add_argument("--mode", required=True, choices=MODES)
+        command.add_argument("--api-name", required=True, help="TLS name on the PVE certificate")
+        command.add_argument("--ca-file", required=True, type=Path, help="trusted PVE CA file")
+        command.add_argument("--token-file", required=True, type=Path, help="0600 PVE token file")
+        command.set_defaults(func=cmd_pve_native)
 
     release = sub.add_parser("release", help="release tooling")
     release_sub = release.add_subparsers(dest="release_command", required=True)
