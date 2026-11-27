@@ -13,6 +13,7 @@ import stat
 import subprocess
 import time
 from pathlib import Path
+from typing import Literal
 
 PROFILE = "pve-native/v1"
 MODES = ("standalone", "agent")
@@ -330,12 +331,33 @@ def _read_api_response(
     deadline: float,
     max_response: int,
 ) -> tuple[int, object]:
+    return _request_api_response(
+        api_name, context, token, path, deadline=deadline, max_response=max_response
+    )
+
+
+def _request_api_response(
+    api_name: str,
+    context: ssl.SSLContext,
+    token: str,
+    path: str,
+    *,
+    deadline: float,
+    max_response: int,
+    method: Literal["GET", "POST"] = "GET",
+    body: bytes = b"",
+) -> tuple[int, object]:
     host = f"[{api_name}]" if ":" in api_name else api_name
-    request = (
-        f"GET {path} HTTP/1.1\r\nHost: {host}:{API_PORT}\r\n"
+    headers = (
+        f"{method} {path} HTTP/1.1\r\nHost: {host}:{API_PORT}\r\n"
         f"Authorization: PVEAPIToken={token}\r\n"
-        "Connection: close\r\nAccept: application/json\r\n\r\n"
-    ).encode("ascii")
+        "Connection: close\r\nAccept: application/json\r\n"
+    )
+    if method == "POST":
+        headers += (
+            f"Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {len(body)}\r\n"
+        )
+    request = (headers + "\r\n").encode("ascii") + body
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
         connection.settimeout(_remaining(deadline))
         connection.connect((API_HOST, API_PORT))
@@ -345,7 +367,7 @@ def _read_api_response(
                 tls_socket.settimeout(_remaining(deadline))
                 tls_socket.sendall(request)
                 reader = _DeadlineReader(tls_socket, deadline)
-                with http.client.HTTPResponse(reader, method="GET") as response:
+                with http.client.HTTPResponse(reader, method=method) as response:
                     response.begin()
                     if response.status != 200:
                         return response.status, None
