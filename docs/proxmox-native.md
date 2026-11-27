@@ -241,3 +241,67 @@ to an hour of CPU fractions and memory and root filesystem measurements in
 bytes. Guest details show PVE evidence for network attachments, measurements
 and matching tasks where supported by the observed privileges and guest
 registration. Guest OS and in-guest details are unverified in this profile.
+
+### Inventory API qualification
+
+The inventory token must receive `release: "9.3"` and `version: "9.3.1"` from
+`GET /api2/json/version` over the registered TLS connection. The collector
+checks that exact pair before the initial and final scope reads. The installed
+package is checked by native preflight. Inventory independently checks the
+API reply using its own credential. Every other version pair is unsupported.
+The first scoped read on real PVE 9.3.1 covered QEMU and LXC, bridge and storage
+data, RRD, tasks, and LXC permission removal and restoration.
+[PVE 9.3.1 read evidence](https://github.com/grethel-labs/opstend/pull/12)
+
+All paths below are GETs relative to `/api2/json` on PVE 9.3.1. Use
+privilege-separated credentials with narrowly scoped grants for both the PVE
+user and the token. Effective permission reports must contain only
+`VM.Audit`, `Sys.Audit`, `Pool.Audit`, and `Datastore.Audit`; use custom roles
+when a built-in role includes other privileges.
+[PVE user and token management](https://github.com/proxmox/pve-docs/blob/master/pveum.adoc) · [PVE API viewer](https://pve.proxmox.com/pve-docs/api-viewer/)
+
+| Path | Required visibility | Projected evidence |
+|---|---|---|
+| `/version` | Authenticated token | Exact version pair for qualification; extra fields such as the build repository identifier are ignored. |
+| `/access/permissions` and `/access/permissions?path=/nodes/{node}` | Token's own effective ACL, with an exact path check for node audit | Checks token scope and rejects unexpected privileges. ACL contents and principals stay out of the projection. |
+| `/cluster/resources` | `VM.Audit` on `/vms/{vmid}`, `Sys.Audit` on `/nodes/{node}`, `Pool.Audit` on `/pool/{pool}`, `Datastore.Audit` on `/storage/{store}` | Scoped node and guest identities and supported counters, visible pool names and guest pool links, and per-node datastore type, content kinds, sharing flag and capacity. Pool membership and aggregate counters, storage usage and volumes, and other resource types are not projected. |
+| `/nodes/{node}/{qemu\|lxc}/{vmid}/config?current=1` | Visible guest and `VM.Audit` on `/vms/{vmid}` | Interface index, bridge name and explicit VLAN tag from `netN`. Guest IP and MAC addresses, full config, guest OS, agent capabilities and in-guest state are not collected as evidence. |
+| `/nodes/{node}/rrddata?timeframe=hour&cf=AVERAGE` | Exact effective `Sys.Audit` on `/nodes/{node}` | CPU fraction, memory and root filesystem usage and capacity in bytes. |
+| `/nodes/{node}/{qemu\|lxc}/{vmid}/rrddata?timeframe=hour&cf=AVERAGE` | Visible guest, `VM.Audit` and PVE's guest identity and registration time | Guest CPU fraction and capacity, memory and disk in bytes, and disk and network rates in bytes per second. Only buckets after the registration and interpolation window are eligible. |
+| `/nodes/{node}/tasks?vmid={vmid}&source=all&limit=20` | Visible guest, its PVE identity and registration time, and exact effective `Sys.Audit` on `/nodes/{node}` | Selected lifecycle operations for the matching guest kind and ID, with times and a normalized status. Usernames, UPIDs, task logs and raw diagnostics are not projected. |
+
+The agent makes each request within a two-second limit and each collection
+within a ten-second limit. It uses a separate time reserve for rechecking
+version and scope at the end. The first HTTP 429 ends that inventory
+collection with `status: unavailable` and `evidence.state: rate_limited`
+at the affected source. It sends no further inventory GETs for that
+collection. The next scheduled refresh starts a new collection independently
+of any `Retry-After` header. A different version pair also leaves the
+inventory unavailable, with `api_version` evidence in state `unsupported`.
+A malformed version, ACL or resource roster refuses the snapshot with
+`invalid` evidence. A malformed optional detail leaves its items empty with
+`invalid` evidence. The existing CLI and HTTPS status values also apply
+to these results.
+
+### Rotate the PVE API trust anchor
+
+Confirm the new trust anchor with the operator responsible for the PVE API.
+Compare its SHA-256 fingerprint against a trusted out-of-band copy and
+check the new endpoint chain for the registered API name. Keep that name
+in the new certificate's SAN. Replace the PEM at the original protected
+`--ca-file` path with the confirmed anchor. Restart
+`opstend-pve-agent.service` so systemd reloads its `pve-ca` credential.
+For standalone mode restart `opstend-pve-ui.service` as well, then check
+`pve-native status` and `pve-native inventory` for fresh observations. A
+direct adapter call loads its explicit CA file for each new collection.
+Systemd's per-start credential remains fixed during a running agent.
+[PVE certificate management](https://pve.proxmox.com/pve-docs/chapter-sysadmin.html#sysadmin_certificate_management) · [systemd service credentials](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#LoadCredential=ID:PATH)
+
+An untrusted chain fails TLS before the token is sent. A collection clears
+the previous snapshot before its first inventory GET. If the agent stops
+during the read, the CLI sees unavailable inventory until a fresh
+collection publishes a complete snapshot.
+
+The [PX02 qualification procedure](../tests/integration/gates/m9-px02.md)
+covers the installed CLI and authenticated HTTPS surface, an actual
+PVE permission change, and isolated fault injection for the M9 batch.

@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from ssl import SSLContext
+from ssl import SSLCertVerificationError, SSLContext
 from typing import TypeVar
 
 from steward.core.pve_inventory_models import (
@@ -28,11 +28,13 @@ from steward.core.pve_inventory_models import (
     parse_tasks,
 )
 from steward.core.pve_native import (
+    _API_VERSION,
     PreflightError,
     _api_context,
     _ApiPayloadError,
     _load_token,
     _read_api_response,
+    _supports_api_version,
     _validate_api_name,
 )
 
@@ -47,9 +49,10 @@ _TIMEOUT = 10
 _REQUEST_TIMEOUT = 2
 _FINAL_RESERVE = 3
 _MAX_RESPONSE = 256 * 1024
-# Initial/final permissions and resources, plus at most two exact-node checks
-# per roster node or guest, one detail call per node, and three per guest.
-_MAX_REQUESTS = 5 * MAX_RESOURCES + 4
+# Two passes over version, permissions and resources, plus at most two
+# exact-node checks per roster node or guest, one detail call per node,
+# and three per guest.
+_MAX_REQUESTS = 5 * MAX_RESOURCES + 6
 
 
 @dataclass(frozen=True)
@@ -97,7 +100,7 @@ def _status_state(status: int) -> EvidenceState:
         return "restricted"
     if status == 404:
         return "missing"
-    if status == 429 or 300 <= status <= 399 or 500 <= status <= 599:
+    if 300 <= status <= 399 or 500 <= status <= 599:
         return "unavailable"
     return "invalid"
 
@@ -131,7 +134,11 @@ class _Collector:
                 deadline=min(deadline, now + _REQUEST_TIMEOUT),
                 max_response=_MAX_RESPONSE,
             )
+            if status == 429:
+                raise _InventoryFailure(_evidence(source, "rate_limited"))
             state = _status_state(status)
+        except SSLCertVerificationError:
+            raise _InventoryFailure(_evidence(source, "unavailable")) from None
         except _ApiPayloadError:
             state = "invalid"
         except OSError:
@@ -139,6 +146,17 @@ class _Collector:
         if time.monotonic() >= deadline:
             return None, _evidence(source, "budget")
         return data, _evidence(source, state)
+
+    def check_version(self, *, final: bool = False) -> None:
+        data, evidence = self._get(_API_VERSION, "api_version", final=final)
+        if evidence.state != "observed":
+            raise _InventoryFailure(evidence)
+        try:
+            supported = _supports_api_version(data)
+        except _ApiPayloadError:
+            raise _InventoryFailure(evidence.model_copy(update={"state": "invalid"})) from None
+        if not supported:
+            raise _InventoryFailure(evidence.model_copy(update={"state": "unsupported"}))
 
     def permissions(self, *, node: str | None = None, final: bool = False) -> _Acl:
         scope = f"/nodes/{node}" if node is not None else None
@@ -239,6 +257,7 @@ class _Collector:
         return result
 
     def collect(self) -> InventorySnapshot:
+        self.check_version()
         initial_acl = self.permissions()
         initial, _ = self.resources()
         candidates = tuple(
@@ -258,6 +277,7 @@ class _Collector:
             if row.node in node_audits
         }
 
+        self.check_version(final=True)
         # PVE's ACL listing omits denied child paths. Read its authoritative
         # roster after the ACL check so a new child deny is enforced there.
         final_acl = self.permissions(final=True)

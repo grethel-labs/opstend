@@ -3,6 +3,7 @@ import os
 import socket
 import ssl
 import threading
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -67,7 +68,12 @@ def write_certificate(directory, name):
 
 
 @pytest.fixture
-def pve_api(tmp_path, monkeypatch):
+def pve_tls():
+    return ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
+
+@pytest.fixture
+def pve_api(tmp_path, monkeypatch, pve_tls):
     cert_path, key_path = write_certificate(tmp_path, API_NAME)
     calls = []
     responses = {
@@ -83,22 +89,25 @@ def pve_api(tmp_path, monkeypatch):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
             calls.append((self.command, self.path, self.headers.get("Authorization")))
-            code, payload = responses.get(self.path, (404, b""))
-            self.send_response(code)
-            if code == 302:
-                self.send_header("Location", f"https://127.0.0.1:{self.server.server_port}/other")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            if payload:
-                self.wfile.write(payload)
+            response = responses.get(self.path, (404, b""))
+            code, payload = response() if callable(response) else response
+            with suppress(BrokenPipeError, ConnectionResetError, ssl.SSLEOFError):
+                self.send_response(code)
+                if code == 302:
+                    self.send_header(
+                        "Location", f"https://127.0.0.1:{self.server.server_port}/other"
+                    )
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                if payload:
+                    self.wfile.write(payload)
 
         def log_message(self, *_):
             pass
 
     with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
-        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        tls.load_cert_chain(cert_path, key_path)
-        server.socket = tls.wrap_socket(server.socket, server_side=True)
+        pve_tls.load_cert_chain(cert_path, key_path)
+        server.socket = pve_tls.wrap_socket(server.socket, server_side=True)
         monkeypatch.setattr(pve_native, "API_PORT", server.server_port)
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
         thread.start()

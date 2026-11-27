@@ -34,6 +34,7 @@ _UNIT_DIR = Path("/etc/systemd/system")
 _MIN_MEMORY_KIB = 256 * 1024
 _MIN_DISK = 1024**3
 _TIMEOUT = 5
+_API_VERSION = "/api2/json/version"
 _MAX_RESPONSE = 64 * 1024
 _TOKEN = re.compile(
     r"([A-Za-z0-9_.+%-]+)@([A-Za-z][A-Za-z0-9_.-]*)!"
@@ -351,9 +352,13 @@ def _read_api_response(
                     contents = response.read(max_response + 1)
                     if len(contents) > max_response or response.length:
                         raise _ApiPayloadError
-                document = json.loads(contents, object_pairs_hook=_unique_object)
+                document = json.loads(
+                    contents, object_pairs_hook=_unique_object, parse_constant=_reject_api_constant
+                )
                 if not isinstance(document, dict) or "data" not in document:
                     raise _ApiPayloadError
+            except ssl.SSLCertVerificationError:
+                raise
             except OSError:
                 raise _ApiReadError from None
             except (http.client.HTTPException, ValueError, RecursionError):
@@ -390,6 +395,19 @@ def _unique_object(pairs):
     return result
 
 
+def _reject_api_constant(_: str) -> None:
+    raise _ApiPayloadError
+
+
+def _supports_api_version(data: object) -> bool:
+    if not isinstance(data, dict):
+        raise _ApiPayloadError("Invalid PVE API version.")
+    release, version = data.get("release"), data.get("version")
+    if not isinstance(release, str) or not isinstance(version, str) or not release or not version:
+        raise _ApiPayloadError("Invalid PVE API version.")
+    return (release, version) == (PVE_RELEASE, PVE_VERSION)
+
+
 def _probe_api(api_name: str, ca_file: Path, token: str, package_ok: bool) -> dict:
     findings = {
         "tls": _finding(False, "Skipped API TLS after the local compatibility check failed."),
@@ -417,14 +435,10 @@ def _probe_api(api_name: str, ca_file: Path, token: str, package_ok: bool) -> di
         return findings
     findings["permissions"] = _finding(True, "The token has no effective PVE permissions.")
     try:
-        version = _get_api_data(api_name, context, token, "/api2/json/version")
+        version = _get_api_data(api_name, context, token, _API_VERSION)
+        matches = _supports_api_version(version)
     except (OSError, http.client.HTTPException, ValueError, RecursionError):
-        version = None
-    matches = (
-        isinstance(version, dict)
-        and version.get("release") == PVE_RELEASE
-        and version.get("version") == PVE_VERSION
-    )
+        matches = False
     findings["api_version"] = _finding(
         matches, f"Expected matching API and package versions ({PVE_VERSION})."
     )

@@ -5,8 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 from steward.core import pve_inventory
-from test_pve_native import API_NAME, API_TOKEN, PERMISSIONS_PATH, write_certificate
+from test_pve_native import API_NAME, API_TOKEN, PERMISSIONS_PATH, VERSION_PATH, write_certificate
 from test_pve_native import pve_api as pve_api
+from test_pve_native import pve_tls as pve_tls
 from test_pve_native import token_file as token_file
 
 READ_TOKEN = "px02@pve!inventory=14aa8f43-4390-4b66-875f-464814c048de"
@@ -231,6 +232,11 @@ def test_inventory_projects_authorized_resources_with_scoped_guest_details(local
     assert all("/192" not in path and "vmid=192" not in path for _, path, _ in calls)
     assert all("/pools/" not in path for _, path, _ in calls)
     paths = [path for _, path, _ in calls]
+    first_version, final_version = [i for i, path in enumerate(paths) if path == VERSION_PATH]
+    assert first_version == 0
+    assert paths[:3] == [VERSION_PATH, PERMISSIONS_PATH, INDEX]
+    assert paths[final_version : final_version + 3] == [VERSION_PATH, PERMISSIONS_PATH, INDEX]
+    assert paths.index(NODE_RRD) < final_version
     assert paths.count(NODE_RRD) == 1
     initial_audit, final_audit = [i for i, path in enumerate(paths) if path == NODE_PERMISSIONS]
     assert initial_audit < paths.index(NODE_RRD) < final_audit
@@ -243,7 +249,6 @@ def test_inventory_projects_authorized_resources_with_scoped_guest_details(local
         ((401, READ_TOKEN.encode()), "restricted"),
         ((403, READ_TOKEN.encode()), "restricted"),
         ((404, READ_TOKEN.encode()), "missing"),
-        ((429, READ_TOKEN.encode()), "unavailable"),
         ((503, READ_TOKEN.encode()), "unavailable"),
         ((302, b""), "unavailable"),
         ((200, b'{"data":{},"data":{}}'), "invalid"),
@@ -328,7 +333,6 @@ def test_node_rrd_is_discarded_without_final_audit_and_roster(
     ("result", "state"),
     [
         ((403, b""), "restricted"),
-        ((429, b""), "unavailable"),
         (payload([{"time": 1_790_000_000, "memused": "4096"}]), "invalid"),
         (payload([{"time": i, "cpu": 0} for i in range(65)]), "invalid"),
         (payload([{"time": 1_790_000_000, "memused": None}]), "absent"),
@@ -351,7 +355,7 @@ def test_collection_refuses_non_read_privileges(local_target):
     inventory = pve_inventory.collect_inventory(target)
     assert inventory.evidence.state == "restricted"
     assert not inventory.guests
-    assert all(path == PERMISSIONS_PATH for _, path, _ in calls)
+    assert [path for _, path, _ in calls] == [VERSION_PATH, PERMISSIONS_PATH]
 
 
 def test_scope_can_be_empty_without_exposing_public_node_rows(local_target):
@@ -556,7 +560,7 @@ def test_collection_reserves_time_for_visibility_after_detail_budget(local_targe
     monkeypatch.setattr(pve_inventory, "time", SimpleNamespace(monotonic=lambda: now[0]))
 
     def read(api_name, context, token, path, *, deadline, max_response):
-        calls.append((path, deadline))
+        calls.append((path, now[0], deadline))
         if path == VM + "/config?current=1":
             now[0] += pve_inventory._TIMEOUT - pve_inventory._FINAL_RESERVE
             raise TimeoutError
@@ -565,12 +569,13 @@ def test_collection_reserves_time_for_visibility_after_detail_budget(local_targe
 
     monkeypatch.setattr(pve_inventory, "_read_api_response", read)
     inventory = pve_inventory.collect_inventory(target)
-    assert [path for path, _ in calls].count(INDEX) == 2
-    assert all(deadline <= 600 + pve_inventory._TIMEOUT for _, deadline in calls)
+    paths = [path for path, _, _ in calls]
+    assert paths.count(INDEX) == paths.count(VERSION_PATH) == 2
+    assert all(started < deadline <= min(started + 2, 610) for _, started, deadline in calls)
     vm = next(item for item in inventory.guests if item.vmid == 190)
     assert vm.measurements.evidence.state == "budget"
     assert inventory.nodes[0].measurements.evidence.state == "budget"
-    assert all(path != NODE_RRD for path, _ in calls)
+    assert NODE_RRD not in paths
 
 
 @pytest.mark.parametrize("problem", ["wrong-name", "wrong-ca", "same-token-id", "public-token"])
@@ -604,3 +609,93 @@ def test_inventory_requires_verified_tls_and_a_distinct_private_token(
         assert inventory.evidence.state == "unavailable"
         assert not inventory.guests
     assert not calls
+
+
+@pytest.mark.parametrize("phase", ["initial", "final"])
+@pytest.mark.parametrize(
+    ("failure", "state"),
+    [
+        (payload({"version": "9.4.1", "release": "9.4"}), "unsupported"),
+        (payload({"version": "9.3.2", "release": "9.3"}), "unsupported"),
+        (payload({"version": "9.3.1", "release": 93}), "invalid"),
+        ((200, b'{"data":{"version":"9.3.1","version":"9.3.1","release":"9.3"}}'), "invalid"),
+        ((200, b'{"data":{"version":"9.3.1","release":"9.3","extra":NaN}}'), "invalid"),
+        ((403, b"version-body-canary"), "restricted"),
+    ],
+)
+def test_version_failure_stops_inventory_before_visibility_reads(
+    local_target, phase, failure, state
+):
+    target, responses, calls = local_target
+    supported = responses[VERSION_PATH]
+
+    def version():
+        if phase == "final" and len(calls) == 1:
+            return supported
+        return failure
+
+    responses[VERSION_PATH] = version
+    inventory = pve_inventory.collect_inventory(target)
+
+    assert (inventory.evidence.source, inventory.evidence.state) == ("api_version", state)
+    assert not (inventory.nodes or inventory.guests or inventory.datastores or inventory.pools)
+    paths = [path for _, path, _ in calls]
+    assert paths[-1] == VERSION_PATH
+    if phase == "initial":
+        assert paths == [VERSION_PATH]
+    else:
+        assert paths.count(VERSION_PATH) == 2
+        assert paths.count(PERMISSIONS_PATH) == paths.count(INDEX) == 1
+        assert NODE_RRD in paths
+    assert all(method == "GET" and auth == f"PVEAPIToken={READ_TOKEN}" for method, _, auth in calls)
+    assert "version-body-canary" not in inventory.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "limited_path", [VERSION_PATH, PERMISSIONS_PATH, INDEX, VM + "/config?current=1", NODE_RRD]
+)
+def test_first_rate_limit_is_terminal(local_target, limited_path):
+    target, responses, calls = local_target
+    responses[limited_path] = (429, f"raw-throttle-canary {READ_TOKEN}".encode())
+
+    inventory = pve_inventory.collect_inventory(target)
+
+    assert inventory.evidence.state == "rate_limited"
+    assert not (inventory.nodes or inventory.guests or inventory.datastores or inventory.pools)
+    paths = [path for _, path, _ in calls]
+    assert paths[-1] == limited_path
+    assert paths.count(limited_path) == 1
+    serialised = inventory.model_dump_json()
+    assert "raw-throttle-canary" not in serialised
+    assert READ_TOKEN not in serialised
+
+
+def test_certificate_rotation_requires_explicit_direct_trust(local_target, pve_tls, tmp_path):
+    target, responses, calls = local_target
+    replacement_dir = tmp_path / "replacement"
+    replacement_dir.mkdir()
+    rotated_ca, rotated_key = write_certificate(replacement_dir, API_NAME)
+
+    assert pve_inventory.collect_inventory(target).evidence.state == "observed"
+    calls.clear()
+    config_path = VM + "/config?current=1"
+    config = responses[config_path]
+
+    def rotate_after_guest_config():
+        pve_tls.load_cert_chain(rotated_ca, rotated_key)
+        return config
+
+    responses[config_path] = rotate_after_guest_config
+    inventory = pve_inventory.collect_inventory(target)
+    assert (inventory.evidence.source, inventory.evidence.state) == ("guest_rrd", "unavailable")
+    assert not (inventory.nodes or inventory.guests or inventory.datastores or inventory.pools)
+    assert calls[-1][1] == config_path
+
+    calls.clear()
+    inventory = pve_inventory.collect_inventory(target)
+    assert (inventory.evidence.source, inventory.evidence.state) == ("api_version", "unavailable")
+    assert not calls
+
+    rotated_ca.replace(target.ca_file)
+    responses[config_path] = config
+    assert pve_inventory.collect_inventory(target).evidence.state == "observed"
