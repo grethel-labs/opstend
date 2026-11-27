@@ -911,7 +911,7 @@ def test_inventory_binding_keeps_signed_release_and_survives_upgrade_and_removal
     assert active_release(host) == __version__
     assert host.active == {AGENT_UNIT}
     content = unit.read_bytes()
-    assert b"SetCredential=pve-inventory-token:" in content
+    assert b"SetCredential=pve-inventory-token:unavailable\n" in content
     assert f"LoadCredential=pve-inventory-token:{inventory_credential}".encode() in content
     assert inventory_credential.read_bytes() not in content
 
@@ -952,7 +952,16 @@ def test_inventory_binding_keeps_signed_release_and_survives_upgrade_and_removal
 
 @pytest.mark.parametrize(
     "problem",
-    ["relative", "public", "symlink", "directory", "oversized", "same-identity", "same-ref"],
+    [
+        "relative",
+        "public",
+        "group-readable",
+        "symlink",
+        "directory",
+        "oversized",
+        "same-identity",
+        "same-ref",
+    ],
 )
 def test_inventory_binding_rejects_unsafe_credentials(inputs, host, inventory_credential, problem):
     args = inputs.build()
@@ -961,6 +970,8 @@ def test_inventory_binding_rejects_unsafe_credentials(inputs, host, inventory_cr
         path = Path(path.name)
     elif problem == "public":
         path.chmod(0o644)
+    elif problem == "group-readable":
+        path.chmod(0o440)
     elif problem == "symlink":
         target = path.rename(path.with_name("inventory-source"))
         path.symlink_to(target)

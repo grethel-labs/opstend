@@ -33,6 +33,7 @@ from steward.core.pve_native import (
     _unique_object,
     _validate_api_name,
 )
+from steward.core.pve_native_credentials import _SystemdCredential
 
 _STATE = Path("/var/lib/opstend-pve/agent")
 _BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
@@ -72,8 +73,9 @@ def render_unit(
             f"ReadWritePaths={_STATE}\n"
         )
         if inventory_token_file is not None:
+            # A missing source leaves inventory unavailable while the agent starts.
             access += (
-                "SetCredential=pve-inventory-token:\n"
+                "SetCredential=pve-inventory-token:unavailable\n"
                 f"LoadCredential=pve-inventory-token:{_credential_path(inventory_token_file)}\n"
             )
         args = f"agent {api_name}"
@@ -105,7 +107,7 @@ def render_unit(
     )
 
 
-def read_admin_token(path: Path) -> str:
+def read_admin_token(path: Path | _SystemdCredential) -> str:
     try:
         token = _read_file(path, 129, private=True).decode("ascii").removesuffix("\n")
     except (OSError, ValueError):
@@ -134,13 +136,6 @@ def validate_ui_tls(cert_file: Path, key_file: Path) -> ssl.SSLContext:
             f"Use a current UI certificate for IP {UI_HOST} and its unencrypted key."
         ) from None
     return context
-
-
-def _credentials() -> Path:
-    directory = Path(os.environ.get("CREDENTIALS_DIRECTORY", ""))
-    if not directory.is_absolute():
-        raise ValueError("Systemd credentials are required.")
-    return directory
 
 
 def _notify_ready() -> None:
@@ -381,11 +376,11 @@ def _clear_inventory() -> float | None:
 
 def _run_agent(api_name: str) -> None:
     _validate_api_name(api_name)
-    credentials = _credentials()
-    token = _load_token(credentials / "pve-token")
-    ca_file = credentials / "pve-ca"
+    health_token_file = _SystemdCredential("agent", "pve-token")
+    token = _load_token(health_token_file)
+    ca_file = _SystemdCredential("agent", "pve-ca")
     target = RegisteredLocalTarget(
-        api_name, ca_file, credentials / "pve-inventory-token", credentials / "pve-token"
+        api_name, ca_file, _SystemdCredential("agent", "pve-inventory-token"), health_token_file
     )
 
     def observe() -> bool:
@@ -581,9 +576,15 @@ class _StatusHandler(BaseHTTPRequestHandler):
 
 
 def _run_ui() -> None:
-    credentials = _credentials()
-    token = read_admin_token(credentials / "admin-token")
-    context = validate_ui_tls(credentials / "ui-cert", credentials / "ui-key")
+    token = read_admin_token(_SystemdCredential("ui", "admin-token"))
+    with (
+        _SystemdCredential("ui", "ui-cert").open() as cert,
+        _SystemdCredential("ui", "ui-key").open() as key,
+    ):
+        # The certificate checks and OpenSSL load use the same checked files.
+        context = validate_ui_tls(
+            Path(f"/proc/self/fd/{cert.fileno()}"), Path(f"/proc/self/fd/{key.fileno()}")
+        )
     if _status()["status"] == "unavailable":
         raise ValueError("An agent snapshot is required for UI startup.")
     with _StatusServer(token, context) as server:

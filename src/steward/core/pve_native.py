@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Literal
 
+from steward.core.pve_native_credentials import _SystemdCredential
+
 PROFILE = "pve-native/v1"
 MODES = ("standalone", "agent")
 PVE_RELEASE = "9.3"
@@ -86,25 +88,29 @@ def _validate_api_name(name: str) -> None:
     raise PreflightError("The API certificate identity must be a DNS name or IP address.")
 
 
-def _read_file(path: Path, limit: int, *, private: bool = False) -> bytes:
-    # O_NONBLOCK makes opening a substituted FIFO safe before the descriptor check.
-    flags = os.O_RDONLY | os.O_NONBLOCK
-    if private:
-        flags |= os.O_NOFOLLOW
-    fd = os.open(path, flags)
-    with os.fdopen(fd, "rb") as handle:
-        metadata = os.fstat(handle.fileno())
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError("Expected a regular file.")
-        if private and (metadata.st_mode & 0o077 or metadata.st_uid not in (0, os.geteuid())):
-            raise ValueError("Expected a private token file.")
-        contents = handle.read(limit + 1)
+def _read_file(path: Path | _SystemdCredential, limit: int, *, private: bool = False) -> bytes:
+    if isinstance(path, _SystemdCredential):
+        with path.open() as handle:
+            contents = handle.read(limit + 1)
+    else:
+        # O_NONBLOCK makes opening a substituted FIFO safe before the descriptor check.
+        flags = os.O_RDONLY | os.O_NONBLOCK
+        if private:
+            flags |= os.O_NOFOLLOW
+        fd = os.open(path, flags)
+        with os.fdopen(fd, "rb") as handle:
+            metadata = os.fstat(handle.fileno())
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError("Expected a regular file.")
+            if private and (metadata.st_mode & 0o077 or metadata.st_uid not in (0, os.geteuid())):
+                raise ValueError("Expected a private token file.")
+            contents = handle.read(limit + 1)
     if not contents or len(contents) > limit:
         raise ValueError("Unexpected file size.")
     return contents
 
 
-def _load_token(path: Path) -> str:
+def _load_token(path: Path | _SystemdCredential) -> str:
     try:
         token = _read_file(path, 1024, private=True).decode("ascii").removesuffix("\n")
     except (OSError, ValueError):
@@ -405,7 +411,7 @@ def _get_api_data(api_name: str, context: ssl.SSLContext, token: str, path: str)
     return data
 
 
-def _api_context(ca_file: Path) -> ssl.SSLContext:
+def _api_context(ca_file: Path | _SystemdCredential) -> ssl.SSLContext:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ca = _read_file(ca_file, 1024 * 1024).decode("ascii")
     context.load_verify_locations(cadata=ca)
@@ -432,7 +438,9 @@ def _supports_api_version(data: object) -> bool:
     return (release, version) == (PVE_RELEASE, PVE_VERSION)
 
 
-def _probe_api(api_name: str, ca_file: Path, token: str, package_ok: bool) -> dict:
+def _probe_api(
+    api_name: str, ca_file: Path | _SystemdCredential, token: str, package_ok: bool
+) -> dict:
     findings = {
         "tls": _finding(False, "Skipped API TLS after the local compatibility check failed."),
         "permissions": _finding(False, "Skipped the effective token permissions check."),

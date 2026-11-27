@@ -2,6 +2,7 @@ import base64
 import http.client
 import ipaddress
 import json
+import os
 import ssl
 import stat
 import subprocess
@@ -17,7 +18,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
 from steward import pve_native_runtime as runtime
-from steward.core import pve_native
+from steward.core import pve_native, pve_native_credentials
 from steward.core.pve_inventory_models import (
     Evidence,
     Guest,
@@ -80,23 +81,53 @@ def snapshot(tmp_path, monkeypatch):
     return state / "status.json", boot, clock
 
 
-@pytest.mark.parametrize("failure", [None, "tls", "permissions", "api_version"])
-@pytest.mark.parametrize("bad_inventory_token", [False, True])
-def test_agent_publishes_readiness_from_fixed_https_gets(
-    tmp_path, monkeypatch, pve_api, snapshot, failure, bad_inventory_token
-):
-    ca, responses, calls = pve_api
-    credentials = tmp_path / "credentials"
-    credentials.mkdir()
-    (credentials / "pve-ca").write_bytes(ca.read_bytes())
-    token = credentials / "pve-token"
-    token.write_text(API_TOKEN)
-    token.chmod(0o600)
-    if bad_inventory_token:
-        inventory_token = credentials / "pve-inventory-token"
-        inventory_token.write_text("incomplete")
-        inventory_token.chmod(0o600)
-    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credentials))
+@pytest.fixture
+def projected_credentials(tmp_path, monkeypatch):
+    run = tmp_path / "run"
+    run.mkdir(mode=0o755)
+    root = run / "credentials"
+    root.mkdir(mode=0o755)
+    monkeypatch.setattr(pve_native_credentials, "_CREDENTIALS_ROOT", root)
+    owners = {}
+    real_fstat = os.fstat
+
+    def mark_owner(path, uid=0, gid=0):
+        metadata = path.stat()
+        owners[metadata.st_dev, metadata.st_ino] = (uid, gid)
+
+    def fstat(fd):
+        metadata = real_fstat(fd)
+        owner = owners.get((metadata.st_dev, metadata.st_ino))
+        if owner is None:
+            return metadata
+        return os.stat_result((*metadata[:4], *owner, *metadata[6:]))
+
+    mark_owner(root)
+    mark_owner(run)
+    monkeypatch.setattr(pve_native_credentials.os, "fstat", fstat)
+
+    def project(role, entries, *, mode=0o440):
+        directory = root / f"opstend-pve-{role}.service"
+        directory.mkdir(mode=0o750)
+        mark_owner(directory)
+        for name, data in entries.items():
+            path = directory / name
+            path.write_bytes(data)
+            path.chmod(mode)
+            mark_owner(path)
+        directory.chmod(0o550)
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(directory))
+        return directory
+
+    yield project, mark_owner
+
+    for directory in root.iterdir():
+        if directory.is_dir() and not directory.is_symlink():
+            directory.chmod(0o750)
+
+
+@pytest.fixture
+def agent_iteration(monkeypatch):
     ready = []
     monkeypatch.setattr(runtime, "_notify_ready", lambda: ready.append(True))
 
@@ -108,6 +139,21 @@ def test_agent_publishes_readiness_from_fixed_https_gets(
         raise EndIteration
 
     monkeypatch.setattr(runtime.time, "sleep", end_iteration)
+    return ready, EndIteration
+
+
+@pytest.mark.parametrize("failure", [None, "tls", "permissions", "api_version"])
+@pytest.mark.parametrize("inventory_token", [None, b"incomplete", b"unavailable"])
+def test_agent_publishes_readiness_from_fixed_https_gets(
+    pve_api, snapshot, projected_credentials, agent_iteration, failure, inventory_token
+):
+    ca, responses, calls = pve_api
+    project, _ = projected_credentials
+    entries = {"pve-ca": ca.read_bytes(), "pve-token": API_TOKEN.encode()}
+    if inventory_token is not None:
+        entries["pve-inventory-token"] = inventory_token
+    project("agent", entries)
+    ready, EndIteration = agent_iteration
     if failure == "permissions":
         responses[PERMISSIONS_PATH] = (200, b'{"data":{"/":{"VM.Audit":1}}}')
     if failure == "api_version":
@@ -135,6 +181,136 @@ def test_agent_publishes_readiness_from_fixed_https_gets(
     assert stat.S_IMODE(path.stat().st_mode) == 0o640
     assert API_TOKEN not in path.read_text()
     assert runtime._inventory()["status"] == "unavailable"
+
+
+def test_agent_publishes_inventory_from_systemd_scoped_token(
+    local_target, snapshot, projected_credentials, agent_iteration
+):
+    target, responses, calls = local_target
+    project, _ = projected_credentials
+    project(
+        "agent",
+        {
+            "pve-ca": target.ca_file.read_bytes(),
+            "pve-token": API_TOKEN.encode(),
+            "pve-inventory-token": READ_TOKEN.encode(),
+        },
+    )
+    scoped_permissions = responses[PERMISSIONS_PATH]
+    responses[PERMISSIONS_PATH] = lambda: (
+        payload({}) if calls[-1][2] == f"PVEAPIToken={API_TOKEN}" else scoped_permissions
+    )
+    ready, EndIteration = agent_iteration
+    with pytest.raises(EndIteration):
+        runtime._run_agent(API_NAME)
+
+    assert ready == [True]
+    assert runtime._status()["status"] == "healthy"
+    assert runtime._inventory(190)["guest"]["name"] == "guest-190"
+    status_path, _, _ = snapshot
+    persisted = status_path.with_name("inventory.json").read_text()
+    assert API_TOKEN not in persisted
+    assert READ_TOKEN not in persisted
+    assert calls[:2] == [
+        ("GET", path, f"PVEAPIToken={API_TOKEN}") for path in (PERMISSIONS_PATH, VERSION_PATH)
+    ]
+    assert any(path == INDEX for _, path, _ in calls[2:])
+    assert all(
+        method == "GET" and auth == f"PVEAPIToken={READ_TOKEN}" for method, _, auth in calls[2:]
+    )
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "wrong-env",
+        "cross-role",
+        "symlink-directory",
+        "symlink-file",
+        "mode",
+        "uid",
+        "gid",
+        "hardlink",
+        "writable-directory",
+    ],
+)
+def test_agent_rejects_untrusted_systemd_credentials(projected_credentials, monkeypatch, problem):
+    project, mark_owner = projected_credentials
+    directory = project("agent", {"pve-token": API_TOKEN.encode()})
+    token = directory / "pve-token"
+    if problem == "wrong-env":
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(directory.parent))
+    elif problem == "cross-role":
+        project("ui", {"admin-token": ADMIN_TOKEN.encode()})
+    elif problem == "symlink-directory":
+        alternative = directory.rename(directory.with_name("other.service"))
+        directory.symlink_to(alternative, target_is_directory=True)
+    elif problem == "symlink-file":
+        directory.chmod(0o750)
+        alternative = token.rename(token.with_name("other-token"))
+        token.symlink_to(alternative)
+        directory.chmod(0o550)
+    elif problem == "mode":
+        token.chmod(0o444)
+    elif problem == "uid":
+        mark_owner(token, uid=1001)
+    elif problem == "gid":
+        mark_owner(token, gid=1001)
+    elif problem == "hardlink":
+        (directory.parent / "hardlink").hardlink_to(token)
+    elif problem == "writable-directory":
+        directory.chmod(0o570)
+
+    with pytest.raises(pve_native.PreflightError, match="PVE token file"):
+        pve_native._load_token(pve_native_credentials._SystemdCredential("agent", "pve-token"))
+
+
+@pytest.mark.parametrize("mode", [0o400, 0o440])
+def test_ui_starts_with_systemd_credentials(
+    tmp_path, monkeypatch, snapshot, projected_credentials, mode
+):
+    project, _ = projected_credentials
+    cert, key = ui_certificate(tmp_path)
+    project(
+        "ui",
+        {
+            "admin-token": ADMIN_TOKEN.encode(),
+            "ui-cert": cert.read_bytes(),
+            "ui-key": key.read_bytes(),
+        },
+        mode=mode,
+    )
+    runtime._publish(dict.fromkeys(("tls", "permissions", "api_version"), True))
+    ready = []
+    responses = []
+    monkeypatch.setattr(runtime, "_notify_ready", lambda: ready.append(True))
+    monkeypatch.setattr(runtime, "UI_PORT", 0)
+
+    def serve(server):
+        assert ready == [True]
+        port = server.server_port
+        monkeypatch.setattr(runtime, "_HOSTS", {f"127.0.0.1:{port}"})
+        server.timeout = 2
+        thread = threading.Thread(target=server.handle_request)
+        thread.start()
+        connection = http.client.HTTPSConnection(
+            "127.0.0.1", port, timeout=2, context=ssl.create_default_context(cafile=str(cert))
+        )
+        try:
+            connection.request(
+                "GET", "/status", headers={"Authorization": basic(f"admin:{ADMIN_TOKEN}")}
+            )
+            response = connection.getresponse()
+            responses.append((response.status, response.read()))
+        finally:
+            connection.close()
+            thread.join(timeout=3)
+
+    monkeypatch.setattr(runtime._StatusServer, "serve_forever", serve)
+    runtime._run_ui()
+    [(status, body)] = responses
+    assert status == 200
+    assert b"healthy" in body
 
 
 def test_snapshot_freshness_and_projection(snapshot, monkeypatch):
@@ -609,7 +785,8 @@ def test_inventory_systemd_credentials_are_optional_and_agent_only(tmp_path):
     assert "pve-inventory-token" not in runtime.render_unit("agent", **args)
     agent = runtime.render_unit("agent", inventory_token_file=token, **args)
     assert (
-        f"SetCredential=pve-inventory-token:\nLoadCredential=pve-inventory-token:{token}\n" in agent
+        f"SetCredential=pve-inventory-token:unavailable\nLoadCredential=pve-inventory-token:{token}\n"
+        in agent
     )
     assert "pve-inventory-token" not in runtime.render_unit(
         "ui", inventory_token_file=token, **args
