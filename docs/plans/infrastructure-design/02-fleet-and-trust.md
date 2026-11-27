@@ -142,6 +142,85 @@ für Daten oder Ausführung. Die Ausführung besitzt ihren eigenen engen
 Credential-Pfad. Für die Graphansicht wird vor Suchabfragen, Kanten und
 Aggregationen gefiltert. [Dashboards und Topologie](06-observability-and-ui.md)
 
+### Enrollment und API-only-Inventar betreiben (FL01.2)
+
+Der Koordinator läuft unter einem eigenen Konto und bindet HTTPS an eine
+explizite private IP. Der Betreiber stellt die Server- und Client-CA bereit
+und verwaltet deren Ausgaben. Das Zertifikat des Koordinators braucht einen
+DNS- oder IP-SAN für den Agenten-Endpunkt. Agenten erzeugen und behalten ihre
+privaten Schlüssel lokal und verwenden ein Client-Zertifikat für mTLS. Den
+SHA-256-Fingerabdruck des öffentlichen Client-Schlüssels bestätigt der
+Betreiber über einen unabhängigen Kanal. Die lokalen DB-Befehle laufen unter
+dem Koordinator-Konto. Die Schlüsseldateien bleiben beim jeweiligen Dienst.
+
+```sh
+install -d -m 0700 /srv/opstend-fleet
+db=/srv/opstend-fleet/fleet.db
+opstend fleet register-site --db "$db" --name lab
+opstend fleet register-host --db "$db" --site-id "$site" --name pve-a
+opstend fleet register-agent --db "$db" --host-id "$host" --name pve-a-connector
+# Im eigenen Prozess starten.
+opstend fleet serve --db "$db" --bind 10.10.20.5 --port 8443 \
+  --cert-file /srv/opstend-fleet/server.pem --key-file /srv/opstend-fleet/server.key \
+  --client-ca-file /srv/opstend-fleet/client-ca.pem
+```
+
+Die Beispiele verwenden die zuvor ausgegebenen IDs in `$site`, `$host`,
+`$agent`, `$instance` und `$route`. Für API-only bestätigt der Betreiber
+`cluster-id`, antwortenden Knoten, API-Namen, numerische Adresse und
+SHA-256 des DER-kodierten PVE-TLS-Leaf-Zertifikats aus unabhängiger,
+vertrauenswürdiger PVE-Verwaltungssicht. Bei einem Cluster stammt
+`cluster-id` aus dem Cluster-Eintrag von `/api2/json/cluster/status`, bei
+Standalone aus dem einzigen lokalen Knoteneintrag. Das Register speichert
+die native ID als Hash. Jeder weitere Cluster-Zugang wird für dieselbe
+Instanz einzeln bestätigt.
+
+```sh
+opstend fleet register-instance --db "$db" --site-id "$site" \
+  --kind cluster --native-id "$native_id"
+opstend fleet confirm-route --db "$db" --instance-id "$instance" --host-id "$host" \
+  --api-name pve-a.lab.example --node pve-a --address 10.10.30.21 \
+  --native-id "$native_id" --leaf-sha256 "$leaf_sha256"
+opstend fleet key-fingerprint --cert-file /path/to/verified-client.pem
+opstend fleet issue-invite --db "$db" --agent-id "$agent" --capability pve_inventory \
+  --route-id "$route" --key-fingerprint "$client_spki" --ttl 600 \
+  --invite-out /srv/opstend-fleet/connector.invite
+```
+
+Die Einladung über einen geschützten Kanal zustellen und als Datei mit
+Modus `0600` im Besitz des Agenten ablegen. Der PVE-Connector läuft im
+Zielnetz. Verwende einen privilegiengetrennten PVE-API-Token und gewähre
+`Sys.Audit` auf `/` für Benutzer und Token jeweils ohne Vererbung, damit
+der Connector die Instanz prüfen kann. Die weiteren Leserechte richten sich
+nach dem gewünschten Inventarumfang. Die lokale Token-Datei enthält die
+vollständige Referenz `benutzer@realm!token=UUID`. Sie und die PVE-CA
+verbleiben beim Connector.
+
+```sh
+opstend fleet enroll --endpoint https://fleet.lab.example:8443 \
+  --cert-file /etc/fleet/client.pem --key-file /etc/fleet/client.key \
+  --server-ca-file /etc/fleet/server-ca.pem --invite-file /etc/fleet/connector.invite
+opstend fleet collect-pve --endpoint https://fleet.lab.example:8443 \
+  --cert-file /etc/fleet/client.pem --key-file /etc/fleet/client.key \
+  --server-ca-file /etc/fleet/server-ca.pem --pve-ca-file /etc/fleet/pve-ca.pem \
+  --pve-token-ref file:/etc/fleet/pve.token
+```
+
+Für einen reinen Agenten lädt der Betreiber mit `--capability heartbeat`
+ein und lässt `--route-id` weg. `opstend fleet heartbeat` verwendet dieselben
+TLS-Optionen wie `enroll`. Rotation stellt eine Einladung für einen neuen
+SPKI mit den Optionen von `issue-invite` und der aktuellen Generation aus.
+Beim erfolgreichen Einlösen wechselt der Schlüssel atomar. Ein Widerruf
+wirkt bei der nächsten autoritativen Anfrage.
+
+```sh
+opstend fleet rotate --db "$db" --agent-id "$agent" --generation "$generation" \
+  --capability pve_inventory --route-id "$route" --key-fingerprint "$new_spki" \
+  --invite-out /srv/opstend-fleet/new-connector.invite
+opstend fleet revoke --db "$db" --agent-id "$agent" --generation "$generation"
+opstend fleet guest-history --db "$db" --instance-id "$instance" --vmid 101
+```
+
 ## Sequenz für einen Gast-Neustart
 
 1. Der Operator erhält Inventar und tatsächliche Capability für genau den

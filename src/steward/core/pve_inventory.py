@@ -107,34 +107,41 @@ def _status_state(status: int) -> EvidenceState:
 
 
 class _Collector:
-    def __init__(
-        self, target: RegisteredLocalTarget, context: SSLContext, token: str, deadline: float
-    ):
-        self.target = target
+    request_limit = _MAX_REQUESTS
+
+    def __init__(self, api_name: str, context: SSLContext, token: str, deadline: float):
+        self.api_name = api_name
         self.context = context
         self.token = token
         self.deadline = deadline
         self.detail_deadline = deadline - _FINAL_RESERVE
         self.requests = 0
 
+    def _request(self, path: str, deadline: float) -> tuple[int, object]:
+        return _read_api_response(
+            self.api_name,
+            self.context,
+            self.token,
+            path,
+            deadline=deadline,
+            max_response=_MAX_RESPONSE,
+        )
+
+    def _check_identity(self, acl: _Acl, *, final: bool = False) -> None:
+        # The native loopback profile has no external route binding.
+        pass
+
     def _get(
         self, path: str, source: EvidenceSource, *, final: bool = False
     ) -> tuple[object, Evidence]:
         deadline = self.deadline if final else self.detail_deadline
         now = time.monotonic()
-        if self.requests >= _MAX_REQUESTS or now >= deadline:
+        if self.requests >= self.request_limit or now >= deadline:
             return None, _evidence(source, "budget")
         self.requests += 1
         data = None
         try:
-            status, data = _read_api_response(
-                self.target.api_name,
-                self.context,
-                self.token,
-                path,
-                deadline=min(deadline, now + _REQUEST_TIMEOUT),
-                max_response=_MAX_RESPONSE,
-            )
+            status, data = self._request(path, min(deadline, now + _REQUEST_TIMEOUT))
             if status == 429:
                 raise _InventoryFailure(_evidence(source, "rate_limited"))
             state = _status_state(status)
@@ -260,6 +267,7 @@ class _Collector:
     def collect(self) -> InventorySnapshot:
         self.check_version()
         initial_acl = self.permissions()
+        self._check_identity(initial_acl)
         initial, _ = self.resources()
         candidates = tuple(
             guest
@@ -312,12 +320,13 @@ class _Collector:
             and _has_audit(final_acl, f"/storage/{row.storage}", "Datastore.Audit")
         )
         guests = _visible_guests(final.guests, details, node_audits, pools, final_acl)
+        self._check_identity(final_acl, final=True)
         if time.monotonic() >= self.deadline:
             raise _InventoryFailure(evidence.model_copy(update={"state": "budget"}))
         if not (nodes or guests or pools or datastores):
             evidence = evidence.model_copy(update={"state": "absent"})
         return InventorySnapshot(
-            api_name=self.target.api_name,
+            api_name=self.api_name,
             observed_at=evidence.observed_at,
             evidence=evidence,
             nodes=nodes,
@@ -381,7 +390,7 @@ def collect_inventory(target: RegisteredLocalTarget) -> InventorySnapshot:
         evidence = _evidence("permissions", "unavailable")
     else:
         try:
-            return _Collector(target, context, token, deadline).collect()
+            return _Collector(target.api_name, context, token, deadline).collect()
         except _InventoryFailure as exc:
             evidence = exc.evidence
     return InventorySnapshot(

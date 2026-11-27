@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import AwareDatetime
+from pydantic import AwareDatetime, field_validator
 
 from .pve_inventory_models import (
     EvidenceSource,
@@ -66,6 +66,23 @@ class PveRouteIdentity(Projection):
     node: NodeName
 
 
+class PveConnectorRoute(Projection):
+    route_id: str
+    instance_id: str
+    host_id: str
+    api_name: str
+    node: NodeName
+    kind: InstanceKind
+    instance_binding: str
+    transport_fingerprint: str
+    address: str
+
+    @field_validator("address")
+    @classmethod
+    def canonical_address(cls, address: str) -> str:
+        return _numeric_address(address)
+
+
 class InventoryObservation(Projection):
     id: str
     instance_id: str
@@ -110,6 +127,23 @@ CREATE TABLE IF NOT EXISTS fleet_routes (
     node TEXT NOT NULL, fingerprint TEXT NOT NULL,
     UNIQUE (instance_id, api_name), UNIQUE (instance_id, node)
 );
+CREATE TABLE IF NOT EXISTS fleet_route_addresses (
+    route_id TEXT PRIMARY KEY REFERENCES fleet_routes(id), address TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS fleet_agent_grants (
+    agent_id TEXT PRIMARY KEY REFERENCES fleet_agents(id), generation INTEGER NOT NULL,
+    fingerprint TEXT UNIQUE, capability TEXT, route_id TEXT REFERENCES fleet_routes(id)
+);
+CREATE TABLE IF NOT EXISTS fleet_enrolled_keys (
+    fingerprint TEXT PRIMARY KEY
+);
+CREATE TABLE IF NOT EXISTS fleet_invitations (
+    token_hash TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL REFERENCES fleet_agents(id),
+    expected_generation INTEGER NOT NULL, fingerprint TEXT NOT NULL,
+    capability TEXT NOT NULL, route_id TEXT REFERENCES fleet_routes(id), expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS fleet_invitations_agent ON fleet_invitations(agent_id);
 CREATE TABLE IF NOT EXISTS fleet_observations (
     id TEXT PRIMARY KEY, instance_id TEXT NOT NULL REFERENCES fleet_instances(id),
     route_id TEXT NOT NULL REFERENCES fleet_routes(id), observed_at TEXT NOT NULL,
@@ -167,6 +201,15 @@ def _api_name(name: str) -> str:
         return name.lower()
 
 
+def _numeric_address(address: str) -> str:
+    if not isinstance(address, str) or "%" in address:
+        raise ValueError("route address must be a numeric IP")
+    try:
+        return str(ipaddress.ip_address(address))
+    except ValueError:
+        raise ValueError("route address must be a numeric IP") from None
+
+
 def _timestamp(at: datetime) -> str:
     if at.utcoffset() is None:
         raise ValueError("expected a timezone-aware time")
@@ -209,6 +252,12 @@ def _observation(row: sqlite3.Row) -> InventoryObservation:
     for field in ("observed_at", "received_at"):
         values[field] = datetime.fromisoformat(values[field])
     return InventoryObservation(**values)
+
+
+def _committed_observation(observation: InventoryObservation | None) -> InventoryObservation:
+    if observation is None:
+        raise FleetIdentityConflict("conflicting inventory for the same route and observation time")
+    return observation
 
 
 def _guest(row: sqlite3.Row) -> GuestIdentity:
@@ -327,6 +376,22 @@ class FleetIdentityRegistry:
             ).fetchone()
         return None if row is None else PveRouteIdentity(**dict(row))
 
+    def get_connector_route(self, route_id: str) -> PveConnectorRoute | None:
+        with self._connection() as db:
+            return self._connector_route(db, route_id)
+
+    @staticmethod
+    def _connector_route(db: sqlite3.Connection, route_id: str) -> PveConnectorRoute | None:
+        row = db.execute(
+            """SELECT r.id AS route_id, r.instance_id, r.host_id, r.api_name, r.node,
+                      i.kind, i.binding AS instance_binding,
+                      r.fingerprint AS transport_fingerprint, a.address
+               FROM fleet_routes AS r JOIN fleet_instances AS i ON i.id = r.instance_id
+               JOIN fleet_route_addresses AS a ON a.route_id = r.id WHERE r.id = ?""",
+            (route_id,),
+        ).fetchone()
+        return None if row is None else PveConnectorRoute(**dict(row))
+
     def confirm_route(
         self,
         instance_id: str,
@@ -336,14 +401,25 @@ class FleetIdentityRegistry:
         node: str,
         instance_binding: str,
         transport_fingerprint: str,
+        address: str | None = None,
     ) -> PveRouteIdentity:
         binding = _digest(instance_binding)
         fingerprint = _digest(transport_fingerprint)
+        api_name = _api_name(api_name)
+        if address is not None:
+            address = _numeric_address(address)
+            try:
+                api_address = ipaddress.ip_address(api_name)
+            except ValueError:
+                pass  # DNS identity is verified independently of the pinned address.
+            else:
+                if str(api_address) != address:
+                    raise FleetIdentityConflict("numeric API name must match the route address")
         record = PveRouteIdentity(
             id=uuid4().hex,
             instance_id=instance_id,
             host_id=host_id,
-            api_name=_api_name(api_name),
+            api_name=api_name,
             node=node,
         )
         with self._write() as db:
@@ -367,18 +443,27 @@ class FleetIdentityRegistry:
                     fingerprint,
                 ):
                     raise FleetIdentityConflict("route already registered with another identity")
-                return record.model_copy(update={"id": existing["id"]})
-            if (
+                record = record.model_copy(update={"id": existing["id"]})
+            elif (
                 instance["kind"] == "standalone"
                 and db.execute(
                     "SELECT 1 FROM fleet_routes WHERE instance_id = ?", (instance_id,)
                 ).fetchone()
             ):
                 raise FleetIdentityConflict("standalone instance already has a route")
-            db.execute(
-                "INSERT INTO fleet_routes VALUES (?, ?, ?, ?, ?, ?)",
-                (record.id, instance_id, host_id, record.api_name, node, fingerprint),
-            )
+            else:
+                db.execute(
+                    "INSERT INTO fleet_routes VALUES (?, ?, ?, ?, ?, ?)",
+                    (record.id, instance_id, host_id, record.api_name, node, fingerprint),
+                )
+            if address is not None:
+                db.execute(
+                    "INSERT OR IGNORE INTO fleet_route_addresses VALUES (?, ?)",
+                    (record.id, address),
+                )
+                confirmed = self._connector_route(db, record.id)
+                if confirmed is None or confirmed.address != address:
+                    raise FleetIdentityConflict("route already registered with another address")
         return record
 
     def ingest_snapshot(
@@ -397,6 +482,30 @@ class FleetIdentityRegistry:
         guest roster is complete for this instance, including when the roster is empty.
         The native collector's token scope alone cannot establish that coverage.
         """
+        with self._write() as db:
+            observation = self._ingest_snapshot(
+                db,
+                snapshot,
+                route_id=route_id,
+                transport_fingerprint=transport_fingerprint,
+                instance_binding=instance_binding,
+                full_guest_coverage=full_guest_coverage,
+                received_at=received_at,
+            )
+        return _committed_observation(observation)
+
+    def _ingest_snapshot(
+        self,
+        db: sqlite3.Connection,
+        snapshot: InventorySnapshot,
+        *,
+        route_id: str,
+        transport_fingerprint: str,
+        instance_binding: str,
+        full_guest_coverage: bool = False,
+        received_at: datetime | None = None,
+    ) -> InventoryObservation | None:
+        """Return None for a dispute that must commit before the caller raises."""
         if type(full_guest_coverage) is not bool:
             raise ValueError("full_guest_coverage must be an explicit boolean attestation")
         fingerprint = _digest(transport_fingerprint)
@@ -417,85 +526,79 @@ class FleetIdentityRegistry:
         )
         full = successful and full_guest_coverage
         coverage = "full_guest_coverage" if full else "token_scope"
-        with self._write() as db:
-            route = db.execute(
-                """SELECT r.instance_id, r.node, i.kind FROM fleet_routes AS r
-                   JOIN fleet_instances AS i ON i.id = r.instance_id
-                   WHERE r.id = ? AND r.api_name = ? AND r.fingerprint = ? AND i.binding = ?""",
-                (route_id, _api_name(snapshot.api_name), fingerprint, binding),
+        route = db.execute(
+            """SELECT r.instance_id, r.node, i.kind FROM fleet_routes AS r
+               JOIN fleet_instances AS i ON i.id = r.instance_id
+               WHERE r.id = ? AND r.api_name = ? AND r.fingerprint = ? AND i.binding = ?""",
+            (route_id, _api_name(snapshot.api_name), fingerprint, binding),
+        ).fetchone()
+        if route is None:
+            raise FleetIdentityConflict("inventory route identity is unconfirmed")
+        standalone = route["kind"] == "standalone"
+        digest = _snapshot_digest(snapshot, full_guest_coverage, standalone)
+        existing = db.execute(
+            "SELECT * FROM fleet_observations WHERE route_id = ? AND observed_at = ?",
+            (route_id, observed_at),
+        ).fetchone()
+        if existing is not None and existing["digest"] == digest:
+            return _observation(existing)
+        if existing is not None:
+            db.execute("UPDATE fleet_observations SET disputed = 1 WHERE id = ?", (existing["id"],))
+            db.execute(
+                """UPDATE fleet_guests SET state = 'continuity_required'
+                   WHERE observation_id = ? AND state != 'replaced'""",
+                (existing["id"],),
+            )
+            return None
+        if successful and (not valid_roster or (state == "absent" and roster)):
+            raise FleetIdentityConflict("inconsistent guest roster")
+        if (
+            successful
+            and standalone
+            and any(item.node != route["node"] for item in (*snapshot.nodes, *roster.values()))
+        ):
+            raise FleetIdentityConflict("standalone inventory disagrees with its node")
+        instance_id = route["instance_id"]
+        newer = (
+            successful
+            and db.execute(
+                """SELECT 1 FROM fleet_observations WHERE instance_id = ?
+               AND source = 'cluster_resources' AND state IN ('observed', 'absent')
+               AND observed_at >= ? LIMIT 1""",
+                (instance_id, observed_at),
             ).fetchone()
-            if route is None:
-                raise FleetIdentityConflict("inventory route identity is unconfirmed")
-            standalone = route["kind"] == "standalone"
-            digest = _snapshot_digest(snapshot, full_guest_coverage, standalone)
-            existing = db.execute(
-                "SELECT * FROM fleet_observations WHERE route_id = ? AND observed_at = ?",
-                (route_id, observed_at),
-            ).fetchone()
-            if existing is not None and existing["digest"] == digest:
-                return _observation(existing)
-            if existing is not None:
-                db.execute(
-                    "UPDATE fleet_observations SET disputed = 1 WHERE id = ?", (existing["id"],)
-                )
-                db.execute(
-                    """UPDATE fleet_guests SET state = 'continuity_required'
-                       WHERE observation_id = ? AND state != 'replaced'""",
-                    (existing["id"],),
-                )
-            else:
-                if successful and (not valid_roster or (state == "absent" and roster)):
-                    raise FleetIdentityConflict("inconsistent guest roster")
-                if (
-                    successful
-                    and standalone
-                    and any(
-                        item.node != route["node"] for item in (*snapshot.nodes, *roster.values())
-                    )
-                ):
-                    raise FleetIdentityConflict("standalone inventory disagrees with its node")
-                instance_id = route["instance_id"]
-                newer = (
-                    successful
-                    and db.execute(
-                        """SELECT 1 FROM fleet_observations WHERE instance_id = ?
-                       AND source = 'cluster_resources' AND state IN ('observed', 'absent')
-                       AND observed_at >= ? LIMIT 1""",
-                        (instance_id, observed_at),
-                    ).fetchone()
-                    is None
-                )
-                record = InventoryObservation(
-                    id=uuid4().hex,
-                    instance_id=instance_id,
-                    route_id=route_id,
-                    observed_at=snapshot.observed_at,
-                    received_at=received_at.astimezone(UTC),
-                    coverage=coverage,
-                    source=source,
-                    state=state,
-                )
-                db.execute(
-                    """INSERT INTO fleet_observations
-                       (id, instance_id, route_id, observed_at, received_at,
-                        coverage, source, state, digest)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        record.id,
-                        instance_id,
-                        route_id,
-                        observed_at,
-                        received,
-                        coverage,
-                        source,
-                        state,
-                        digest,
-                    ),
-                )
-                if newer:
-                    self._apply_roster(db, record, roster)
-                return record
-        raise FleetIdentityConflict("conflicting inventory for the same route and observation time")
+            is None
+        )
+        record = InventoryObservation(
+            id=uuid4().hex,
+            instance_id=instance_id,
+            route_id=route_id,
+            observed_at=snapshot.observed_at,
+            received_at=received_at.astimezone(UTC),
+            coverage=coverage,
+            source=source,
+            state=state,
+        )
+        db.execute(
+            """INSERT INTO fleet_observations
+               (id, instance_id, route_id, observed_at, received_at,
+                coverage, source, state, digest)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                record.id,
+                instance_id,
+                route_id,
+                observed_at,
+                received,
+                coverage,
+                source,
+                state,
+                digest,
+            ),
+        )
+        if newer:
+            self._apply_roster(db, record, roster)
+        return record
 
     def get_observation(self, observation_id: str) -> InventoryObservation | None:
         with self._connection() as db:
