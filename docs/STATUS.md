@@ -1,6 +1,6 @@
 # Status
 
-Candidate source version **0.1.0rc1** · Evidence summary as of 2026-11-26.
+Candidate source version **0.1.0rc1** · Evidence summary as of 2026-11-27.
 
 [Delivery goal](goal.md) tracks milestone exit criteria. [Release scope](../release/accepted-subset.yml) defines the supported feature subset. The card table records prior acceptance and the limits of that evidence. Site-specific records are kept by the operators who ran the gates.
 
@@ -23,7 +23,7 @@ This evidence supports the five entries in the release subset. The exact signed 
 | L01–L02 | L01 locally accepted. L02 accepted for separately isolated groups through the guarded private renderer | Public application-stack validation stays guarded. Shared mutation custody is deferred to X1 |
 | L03 | Accepted for the window model, durable admission, lifecycle events, HTTP/TCP checks and the container unknown path | Healthy-container G8 deferred for RC1 after two fixture custody failures before deployment |
 | Private LAN admin | Accepted for routed IPv4 access with managed source rules, numeric-IP HTTPS and loopback support | Direct bridged client coverage remains open. Public administration is unsupported |
-| S01 | Partial. An unsigned candidate was built locally. Offline signing mechanics, pre-SSH verification and protected-ref workflow checks were exercised locally | Operator signature, independent trusted public key, exact-archive host acceptance and the hosted protected workflow run remain open |
+| S01 | Partial. An unsigned candidate was built locally. Offline signing mechanics and pre-SSH verification were exercised locally. The [protected release build](https://github.com/grethel-labs/opstend/actions/runs/45979630483) for `2b245af` reached its required reviewer gate | Hosted build result, operator signature, independent trusted public key and exact-archive host acceptance remain open |
 | L04–L06 | Prior host gates exercised verified updates, recovery and patch behavior with candidate guards lifted for the tests. Additional update hardening has partial host evidence | `projects.update` and `automation.patch` stay guarded. Unknown-probe coverage and B08-dependent release acceptance remain open |
 | L07–L08 | Partial. Containment and reactivation with supplied scan evidence exercised on a test host. Qualified scanner handoff covered locally | Wired scanner-to-host acceptance and backup activation remain open. `applications.on_critical` stays guarded |
 | L09 | Partial. Manual retire and re-add exercised on a test host. Guarded automatic path exercised locally | Automatic-path host acceptance and B08 remain open |
@@ -36,3 +36,4 @@ This evidence supports the five entries in the release subset. The exact signed 
 | R04 | Partial. Digest promotion and inventory exercised in a loopback registry fixture | Installed validator, application-update mapping and approval authority remain open |
 | R05 | Partial. Local repair and pull-request binding exercised | Qualified runner, installed validation, host branch custody and an authorized forge test remain open. `automation.repair` stays guarded |
 | S02–S03 | Deferred for RC1 | Additional target profiles and public administration with OIDC/MFA remain unsupported |
+| PX01 | The [read-only preflight and plan](proxmox-native.md) passed on nested Proxmox VE 9.3.1, Debian 13 amd64, with running QEMU and LXC fixtures. Wrong TLS identity and a reserved install path were refused. PVE service, host package and guest configuration checks matched before and after the read-only runs | Signed native installation, unchanged repeat, upgrade, reboot and uninstall remain open |
