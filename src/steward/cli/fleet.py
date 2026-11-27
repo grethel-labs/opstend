@@ -11,16 +11,27 @@ import stat
 import sys
 from pathlib import Path
 
+from pydantic import TypeAdapter
+
 from ..core import pve_native
 from ..core.fleet_adoption_models import LocalPveProfile
 from ..core.fleet_connector import collect_pve_adoption, collect_pve_inventory, pve_instance_binding
 from ..core.fleet_enrollment import FleetEnrollment
 from ..core.fleet_identity import FleetIdentityRegistry
 from ..core.fleet_native_profile import export_pve_profile
+from ..core.fleet_policy import FleetPolicy, FleetPolicyConflict, FleetPolicyRevision, FleetTarget
+from ..core.fleet_policy_apply import (
+    FleetPolicyActor,
+    FleetPolicyApply,
+    FleetPolicyGrant,
+    FleetPolicyNotFound,
+)
 from ..fleet_transport import FleetClient, certificate_fingerprint, create_server
+from . import fleet_policy_target
 
 _CAPABILITIES = ("heartbeat", "pve_inventory")
 _INVITE_PATTERN = re.compile(rb"[A-Za-z0-9_-]{32,128}\n?")
+_POLICY_INPUT_LIMIT = 512 * 1024
 
 
 def _registry(path: Path) -> FleetIdentityRegistry:
@@ -187,6 +198,49 @@ def _agent(args: argparse.Namespace) -> None:
     print(result.model_dump_json())
 
 
+def _policy_input[Input](path: Path, adapter: TypeAdapter[Input]) -> Input:
+    try:
+        data = pve_native._read_file(path, _POLICY_INPUT_LIMIT, private=True)
+        json.loads(data.decode("utf-8"), object_pairs_hook=pve_native._unique_object)
+        return adapter.validate_json(data, strict=True)
+    except (ValueError, RecursionError):
+        raise ValueError("invalid private fleet policy input") from None
+
+
+def _policy_operator(args: argparse.Namespace) -> None:
+    service = FleetPolicyApply(_registry(args.db))
+    actor = FleetPolicyActor(subject="local-coordinator", coordinator=True)
+    match args.fleet_command:
+        case "policy-head":
+            result = service.head(actor)
+        case "policy-export":
+            result = service.revision(actor, args.revision)
+        case "policy-commit":
+            desired = _policy_input(args.policy, TypeAdapter(FleetPolicy))
+            result = service.commit(actor, desired, parent=args.parent)
+        case "policy-preview":
+            targets = _policy_input(args.targets, TypeAdapter(tuple[FleetTarget, ...]))
+            result = service.preview(actor, args.revision, targets)
+        case "policy-approve":
+            result = service.approve(actor, args.digest, args.idempotency_key)
+        case "policy-status":
+            result = service.approval(actor, args.approval_id)
+        case "policy-rollback":
+            result = service.rollback(actor, args.revision, parent=args.parent)
+        case "policy-grant":
+            grant = _policy_input(args.grant, TypeAdapter(FleetPolicyGrant))
+            service.set_grant(actor, grant, enabled=not args.revoke)
+            print(json.dumps({"enabled": not args.revoke}))
+            return
+        case "policy-coordinator":
+            service.set_coordinator(actor, args.subject, enabled=not args.revoke)
+            print(json.dumps({"enabled": not args.revoke}))
+            return
+        case _:
+            raise ValueError("unknown fleet policy operation")
+    print(result.export() if isinstance(result, FleetPolicyRevision) else result.model_dump_json())
+
+
 def _run(args: argparse.Namespace) -> int:
     try:
         if args.fleet_command == "key-fingerprint":
@@ -195,9 +249,18 @@ def _run(args: argparse.Namespace) -> int:
             print(export_pve_profile().model_dump_json())
         elif args.fleet_command in {"enroll", "heartbeat", "collect-pve", "collect-pve-adoption"}:
             _agent(args)
+        elif args.fleet_command in fleet_policy_target.COMMANDS:
+            return fleet_policy_target.run(args, _registry)
+        elif args.fleet_command.startswith("policy-"):
+            _policy_operator(args)
         else:
             _operator(args)
-    except (OSError, ValueError, sqlite3.Error):
+    except FleetPolicyConflict as exc:
+        print(
+            json.dumps({"head": exc.head, "message": "fleet policy has changed"}), file=sys.stderr
+        )
+        return 1
+    except (OSError, ValueError, sqlite3.Error, FleetPolicyNotFound):
         print(
             "error: fleet operation failed (check local setup, identity and authorization)",
             file=sys.stderr,
@@ -272,6 +335,32 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     history = operator("guest-history", "read sanitized guest generations")
     history.add_argument("--instance-id", required=True)
     history.add_argument("--vmid", type=int, required=True)
+    operator("policy-head", "show the fleet policy head and target catalog")
+    export = operator("policy-export", "export a fleet policy revision")
+    export.add_argument("--revision", required=True)
+    commit = operator("policy-commit", "commit a policy from a private JSON file")
+    commit.add_argument("--policy", type=Path, required=True)
+    commit_parent = commit.add_mutually_exclusive_group(required=True)
+    commit_parent.add_argument("--parent")
+    commit_parent.add_argument("--initial", action="store_true", help="expect an empty policy head")
+    preview = operator("policy-preview", "preview a revision against an exact target set")
+    preview.add_argument("--revision", required=True)
+    preview.add_argument("--targets", type=Path, required=True, help="private JSON target array")
+    approve = operator("policy-approve", "approve a reviewed fleet policy preview")
+    approve.add_argument("--digest", required=True)
+    approve.add_argument("--idempotency-key", required=True)
+    status = operator("policy-status", "show fleet policy approval outcomes")
+    status.add_argument("--approval-id", required=True)
+    rollback = operator("policy-rollback", "commit a new revision with policy from an earlier one")
+    rollback.add_argument("--revision", required=True)
+    rollback.add_argument("--parent", required=True)
+    grant = operator("policy-grant", "grant or revoke a human principal's fleet policy scope")
+    grant.add_argument("--grant", type=Path, required=True, help="private JSON grant file")
+    grant.add_argument("--revoke", action="store_true")
+    coordinator = operator("policy-coordinator", "grant or revoke a browser coordinator role")
+    coordinator.add_argument("--subject", required=True)
+    coordinator.add_argument("--revoke", action="store_true")
+    fleet_policy_target.register(commands)
     serve = operator("serve", "serve the private mTLS fleet endpoints")
     serve.add_argument("--bind", default="127.0.0.1", help="explicit private numeric bind address")
     serve.add_argument("--port", type=int, default=8443)

@@ -46,6 +46,8 @@ from ..core.secrets import SecretError, redact, validate_admin_token
 from ..core.store import ConflictError, Store
 from ..executor.protocol import DEFAULT_SOCKET, ExecutorError, call
 from .ai_admin import install as install_ai_admin
+from .fleet_policy import install as install_fleet_policy
+from .fleet_policy import open_policy
 
 COOKIE = "__Host-steward_session"
 LOGIN_WINDOW_S = 300
@@ -79,6 +81,8 @@ class Settings:
     start_worker: bool = True
     ai_peer: AdminPeer | None = None
     advice_peer: AdvicePeer | None = None
+    fleet_policy_db: Path | None = None
+    fleet_policy_subject: str | None = None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -87,6 +91,7 @@ class Settings:
             o.strip() for o in env.get("STEWARD_ALLOWED_ORIGINS", "").split(",") if o.strip()
         )
         token_file = env.get("STEWARD_ADMIN_TOKEN_FILE")
+        fleet_db = env.get("STEWARD_FLEET_POLICY_DB")
         backend = env.get("STEWARD_AI_ADMIN_BACKEND")
         if backend not in (None, "managed-local"):
             raise StartupError("invalid AI admin backend")
@@ -113,6 +118,8 @@ class Settings:
             session_ttl_s=int(env.get("STEWARD_SESSION_TTL_MINUTES", "480")) * 60,
             ai_peer=AdminPeer(MANAGED_SOCKET, expected_peer_uid=0) if backend else None,
             advice_peer=advice_peer,
+            fleet_policy_db=Path(fleet_db) if fleet_db else None,
+            fleet_policy_subject=env.get("STEWARD_FLEET_POLICY_SUBJECT"),
         )
 
 
@@ -155,10 +162,13 @@ class TokenSource:
                 return "unavailable-" + secrets.token_hex(8)  # nothing can match: fail closed
         return self._digest.hex()
 
-    def matches(self, candidate: str) -> bool:
+    def authenticate(self, candidate: str) -> str | None:
         fingerprint = self.fingerprint()
-        digest = hashlib.sha256(candidate.encode()).hexdigest()
-        return hmac.compare_digest(digest, fingerprint)
+        try:
+            digest = hashlib.sha256(candidate.encode()).hexdigest()
+        except UnicodeError:
+            return None
+        return fingerprint if hmac.compare_digest(digest, fingerprint) else None
 
 
 class Sessions:
@@ -282,10 +292,19 @@ def create_app(settings: Settings) -> FastAPI:
     if not settings.allowed_origins:
         raise StartupError("STEWARD_ALLOWED_ORIGINS is empty")
     tokens = TokenSource(settings)
+    fleet = None
+    if settings.fleet_policy_db is not None:
+        try:
+            fleet = open_policy(settings.fleet_policy_db, settings.fleet_policy_subject)
+        except (OSError, ValueError, sqlite3.Error):
+            raise StartupError("invalid fleet policy coordinator configuration") from None
+    elif settings.fleet_policy_subject is not None:
+        raise StartupError("fleet policy principal requires a coordinator database")
     settings.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    store = Store(settings.state_dir / "steward.db")
-    sessions = Sessions(settings.state_dir / "sessions.db", settings.session_ttl_s)
-    audit = AuditLog(settings.state_dir / "audit.jsonl")
+    session_file = "fleet-sessions.db" if fleet else "sessions.db"
+    audit_file = "fleet-audit.jsonl" if fleet else "audit.jsonl"
+    sessions = Sessions(settings.state_dir / session_file, settings.session_ttl_s)
+    audit = AuditLog(settings.state_dir / audit_file)
     limiter = LoginLimiter()
     allowed_hosts = {o.split("://", 1)[1] for o in settings.allowed_origins}
     applied_mtime: list[float | None] = [None]
@@ -299,6 +318,15 @@ def create_app(settings: Settings) -> FastAPI:
     )
 
     # ---- helpers ---------------------------------------------------------------
+
+    def session_fingerprint(token_fp: str) -> str:
+        if fleet is None:
+            return token_fp
+        _, actor = fleet
+        fingerprint = json.dumps(
+            [token_fp, str(settings.fleet_policy_db.absolute()), actor.subject]
+        )
+        return hashlib.sha256(fingerprint.encode()).hexdigest()
 
     def executor(action: str, params: dict[str, Any] | None = None, **kwargs: Any):
         return call(action, params, socket_path=settings.executor_socket, **kwargs)
@@ -332,12 +360,16 @@ def create_app(settings: Settings) -> FastAPI:
 
     def require_session(request: Request) -> dict[str, Any]:
         session_id = request.cookies.get(COOKIE)
-        session = sessions.get(session_id, tokens.fingerprint()) if session_id else None
+        session = (
+            sessions.get(session_id, session_fingerprint(tokens.fingerprint()))
+            if session_id
+            else None
+        )
         if session is None:
             raise HTTPException(401, "authentication required")
         if request.method not in ("GET", "HEAD"):
             supplied = request.headers.get("x-csrf-token", "")
-            if not hmac.compare_digest(supplied, session["csrf"]):
+            if not hmac.compare_digest(supplied.encode(), session["csrf"].encode()):
                 raise HTTPException(403, "CSRF token missing or wrong")
         return session
 
@@ -376,7 +408,7 @@ def create_app(settings: Settings) -> FastAPI:
 
     advisor = (
         Advisor(settings.advice_peer, gather_advice, mask_before_infer=True)
-        if settings.advice_peer is not None
+        if settings.advice_peer is not None and fleet is None
         else None
     )
 
@@ -416,11 +448,12 @@ def create_app(settings: Settings) -> FastAPI:
         if limiter.blocked(client):
             audit.append("login_rate_limited", client=client)
             raise HTTPException(429, "too many failed logins, try again later")
-        if not tokens.matches(body.token):
+        token_fp = tokens.authenticate(body.token)
+        if token_fp is None:
             limiter.record_failure(client)
             audit.append("login_failed", client=client)
             raise HTTPException(401, "invalid token")
-        session_id, csrf, expires_at = sessions.create(tokens.fingerprint())
+        session_id, csrf, expires_at = sessions.create(session_fingerprint(token_fp))
         response.set_cookie(
             COOKIE,
             session_id,
@@ -448,7 +481,36 @@ def create_app(settings: Settings) -> FastAPI:
             "csrf": session["csrf"],
             "expires_at": session["expires_at"],
             "version": __version__,
+            "fleet_policy": fleet is not None,
         }
+
+    def install_spa() -> None:
+        @app.get("/{path:path}", include_in_schema=False)
+        def spa(path: str):
+            if path.startswith("api/") or (fleet is not None and path == "api"):
+                raise HTTPException(404)
+            root = STATIC_DIR.resolve()
+            candidate = (root / path).resolve()
+            if path and candidate.is_file() and candidate.is_relative_to(root):
+                return FileResponse(candidate)
+            index = root / "index.html"
+            if not index.is_file():
+                raise HTTPException(503, "web UI is not part of this build")
+            return FileResponse(index, headers={"Cache-Control": "no-store"})
+
+    if fleet is not None:
+        policy, actor = fleet
+        install_fleet_policy(
+            app,
+            policy=policy,
+            actor=actor,
+            require_session=require_session,
+            max_body_bytes=MAX_BODY_BYTES,
+        )
+        install_spa()
+        return app
+
+    store = Store(settings.state_dir / "steward.db")
 
     @app.get("/api/advice")
     def advice_status(request: Request):
@@ -825,18 +887,7 @@ def create_app(settings: Settings) -> FastAPI:
 
     # ---- web UI ----------------------------------------------------------------
 
-    @app.get("/{path:path}", include_in_schema=False)
-    def spa(path: str):
-        if path.startswith("api/"):
-            raise HTTPException(404)
-        root = STATIC_DIR.resolve()
-        candidate = (root / path).resolve()
-        if path and candidate.is_file() and candidate.is_relative_to(root):
-            return FileResponse(candidate)
-        index = root / "index.html"
-        if not index.is_file():
-            raise HTTPException(503, "web UI is not part of this build")
-        return FileResponse(index, headers={"Cache-Control": "no-store"})
+    install_spa()
 
     # ---- job worker ------------------------------------------------------------
 

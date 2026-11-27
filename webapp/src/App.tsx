@@ -4,6 +4,7 @@ import { AuditPage } from "./pages/Audit";
 import { BackupsPage } from "./pages/Backups";
 import { ConfigPage } from "./pages/Config";
 import { EventsPage } from "./pages/Events";
+import { FleetPolicyPage } from "./pages/FleetPolicy";
 import { JobsPage } from "./pages/Jobs";
 import { AiPage } from "./pages/Ai";
 import { OverviewPage } from "./pages/Overview";
@@ -97,6 +98,7 @@ function Login({ onDone }: { onDone: () => void }) {
 export function App() {
   const [auth, setAuth] = useState<"unknown" | "yes" | "no">("unknown");
   const [version, setVersion] = useState("");
+  const [fleetPolicy, setFleetPolicy] = useState(false);
   const [page, setPage] = useState<PageId>(pageFromHash);
 
   const check = useCallback(async () => {
@@ -104,6 +106,7 @@ export function App() {
       const session = await api.session();
       setCsrf(session.csrf);
       setVersion(session.version);
+      setFleetPolicy(session.fleet_policy === true);
       setAuth("yes");
     } catch {
       setAuth("no");
@@ -120,12 +123,12 @@ export function App() {
   if (auth === "unknown") return <main className="login muted">Loading…</main>;
   if (auth === "no") return <Login onDone={check} />;
 
-  const Page = PAGES[page].component;
+  const Page = fleetPolicy ? FleetPolicyPage : PAGES[page].component;
   return (
     <div className="shell">
       <header className="app-header">
         <div className="app-bar shell-width">
-          <a href="#/overview" className="product-brand" aria-label="OpsTend home, by Grethel Labs">
+          <a href={fleetPolicy ? "#/fleet" : "#/overview"} className="product-brand" aria-label="OpsTend home, by Grethel Labs">
             <ProductMark />
           </a>
           <div className="app-actions">
@@ -142,17 +145,17 @@ export function App() {
             </button>
           </div>
         </div>
-        <nav className="section-nav shell-width" aria-label="Sections">
+        {!fleetPolicy && <nav className="section-nav shell-width" aria-label="Sections">
           {(Object.keys(PAGES) as PageId[]).map((id) => (
             <a key={id} href={`#/${id}`} aria-current={id === page ? "page" : undefined}>
               {id === "ai" && <Zorec size={24} />}
               {PAGES[id].title}
             </a>
           ))}
-        </nav>
+        </nav>}
       </header>
       <main className="workspace shell-width">
-        <h1>{PAGES[page].title}</h1>
+        <h1>{fleetPolicy ? "Fleet policy" : PAGES[page].title}</h1>
         <Page onAuthLost={() => setAuth("no")} />
       </main>
     </div>

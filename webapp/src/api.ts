@@ -255,10 +255,85 @@ export interface ConfigApplyJob extends Job {
   result: Record<string, unknown> | null;
 }
 
+export interface FleetTarget {
+  kind: "host" | "pve_instance" | "pve_guest";
+  id: string;
+  generation: number;
+}
+
+export interface FleetTargetView {
+  target: FleetTarget;
+  site_id: string;
+  group_ids: string[];
+  applied_revision: string | null;
+  can_write: boolean;
+}
+
+export interface FleetPolicyHead {
+  head: string | null;
+  can_manage: boolean;
+  targets: FleetTargetView[];
+  approval_ids: string[];
+}
+
+export interface FleetPolicyRevision {
+  id: string;
+  parent: string | null;
+  policy: Record<string, unknown>;
+}
+
+type FleetPolicyField = "maintenance_windows" | "role_assignments" | "credential_refs" | "backup_profile_refs";
+
+export interface FleetPolicyPlan {
+  digest: string;
+  revision: string;
+  expires_at: string;
+  targets: Array<{
+    target: FleetTarget;
+    applied_revision: string | null;
+    local_revision: string | null;
+    observed_at: string | null;
+    effective: {
+      status: "ready" | "pending";
+      values: {
+        maintenance_windows: string[];
+        role_assignments: Array<{ subject: string; role: string }>;
+        credential_refs: string[];
+        backup_profile_refs: string[];
+      };
+      provenance: Partial<Record<FleetPolicyField, Array<{ scope: string; id: string | null }>>>;
+      issues: Array<{ code: string; property: FleetPolicyField | null; scope_ids: string[] }>;
+    };
+  }>;
+}
+
+export interface FleetPolicyApproval {
+  id: string;
+  digest: string;
+  revision: string;
+  expires_at: string;
+  outcomes: Array<{ target: FleetTarget; status: "pending" | "applied" | "rejected"; reason: string | null }>;
+}
+
+const FLEET_POLICY = "/api/fleet/policy";
+
 export const api = {
   login: (token: string) => request<{ csrf: string }>("POST", "/api/login", { token }),
   logout: () => request<unknown>("POST", "/api/logout"),
-  session: () => request<{ csrf: string; expires_at: number; version: string }>("GET", "/api/session"),
+  session: () => request<{ csrf: string; expires_at: number; version: string; fleet_policy?: boolean }>("GET", "/api/session"),
+  fleetPolicy: () => request<FleetPolicyHead>("GET", FLEET_POLICY),
+  fleetPolicyRevision: (id: string) =>
+    request<FleetPolicyRevision>("GET", `${FLEET_POLICY}/revisions/${encodeURIComponent(id)}`),
+  stageFleetPolicy: (policy: Record<string, unknown>, parent: string | null) =>
+    request<FleetPolicyRevision>("POST", `${FLEET_POLICY}/revisions`, { policy, parent }),
+  previewFleetPolicy: (revision: string, targets: FleetTarget[]) =>
+    request<FleetPolicyPlan>("POST", `${FLEET_POLICY}/preview`, { revision, targets }),
+  approveFleetPolicy: (digest: string, key: string) =>
+    request<FleetPolicyApproval>("POST", `${FLEET_POLICY}/approve`, { digest }, { "Idempotency-Key": key }),
+  fleetPolicyApproval: (id: string) =>
+    request<FleetPolicyApproval>("GET", `${FLEET_POLICY}/approvals/${encodeURIComponent(id)}`),
+  rollbackFleetPolicy: (revision: string, parent: string) =>
+    request<FleetPolicyRevision>("POST", `${FLEET_POLICY}/rollback`, { revision, parent }),
   backups: () => request<BackupsResponse>("GET", "/api/backups"),
   status: (live = false) => request<StatusResponse>("GET", `/api/status${live ? "?live=true" : ""}`),
   advice: () => request<{ enabled: boolean }>("GET", "/api/advice"),
