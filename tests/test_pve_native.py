@@ -344,3 +344,58 @@ def test_native_cli_emits_json_and_refusal_exit(
     assert result["ready"] is ready
     assert ("install_plan" in result) is (action == "plan")
     assert API_TOKEN not in output.out + output.err
+
+
+@pytest.mark.parametrize("requested_vmid", [None, 123])
+def test_native_inventory_cli_reads_local_projection(monkeypatch, capsys, requested_vmid):
+    from steward import pve_native_runtime
+
+    projection = {"status": "unavailable"}
+
+    def read_inventory(*, vmid):
+        assert vmid == requested_vmid
+        return projection
+
+    monkeypatch.setattr(pve_native_runtime, "read_inventory", read_inventory)
+    args = ["pve-native", "inventory"]
+    if requested_vmid is not None:
+        args.extend(("--vmid", str(requested_vmid)))
+    with pytest.raises(SystemExit) as result:
+        cli.main(args)
+    assert result.value.code == 0
+    assert json.loads(capsys.readouterr().out) == projection
+
+
+def test_native_install_cli_binds_inventory_reference(monkeypatch, capsys):
+    from steward.core import pve_native_install
+
+    def install(**kwargs):
+        assert kwargs["inventory_token_file"] == Path("/root/fixture/inventory")
+        return {"mode": "agent"}
+
+    monkeypatch.setattr(pve_native_install, "install", install)
+    with pytest.raises(SystemExit) as result:
+        cli.main(
+            [
+                "pve-native",
+                "install",
+                "--mode",
+                "agent",
+                "--api-name",
+                API_NAME,
+                "--ca-file",
+                "/root/fixture/ca",
+                "--token-file",
+                "/root/fixture/health",
+                "--inventory-token-file",
+                "/root/fixture/inventory",
+                "--release-archive",
+                "/root/fixture/release",
+                "--release-public-key",
+                "/root/fixture/key",
+                "--wheelhouse",
+                "/root/fixture/wheels",
+            ]
+        )
+    assert result.value.code == 0
+    assert json.loads(capsys.readouterr().out) == {"mode": "agent"}

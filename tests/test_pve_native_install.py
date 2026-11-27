@@ -881,3 +881,177 @@ def test_remove_refuses_drift_before_stopping_units(inputs, host, drift):
     assert not operation_commands(host, start)
     assert marker.read_bytes() == before
     assert host.active == {AGENT_UNIT}
+
+
+@pytest.fixture
+def inventory_credential(tmp_path):
+    path = tmp_path / "optional-inventory"
+    path.write_text(API_TOKEN.replace("!preflight=", "!inventory="))
+    path.chmod(0o600)
+    return path
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_inventory_binding_keeps_signed_release_and_survives_upgrade_and_removal(
+    tmp_path, inputs, host, inventory_credential, existing, removable_test_tree
+):
+    from steward.core.pve_native_lifecycle import rollback, upgrade
+    from steward.core.pve_native_remove import remove
+
+    args = inputs.build()
+    unit = host.unit_dir / AGENT_UNIT
+    if existing:
+        assert installer.install(**args)["changed"] == 1
+        assert b"pve-inventory-token" not in unit.read_bytes()
+
+    bound_args = {**args, "inventory_token_file": inventory_credential}
+    result = installer.install(**bound_args)
+    assert result["changed"] == 1
+    assert str(inventory_credential) not in json.dumps(result)
+    assert active_release(host) == __version__
+    assert host.active == {AGENT_UNIT}
+    content = unit.read_bytes()
+    assert b"SetCredential=pve-inventory-token:" in content
+    assert f"LoadCredential=pve-inventory-token:{inventory_credential}".encode() in content
+    assert inventory_credential.read_bytes() not in content
+
+    assert installer.install(**bound_args)["changed"] == 0
+    assert installer.install(**args)["changed"] == 0
+    alternative = inventory_credential.with_name("different-ref")
+    alternative.write_bytes(inventory_credential.read_bytes())
+    alternative.chmod(0o600)
+    with pytest.raises(installer.InstallError, match="exact intent"):
+        installer.install(**{**bound_args, "inventory_token_file": alternative})
+    with pytest.raises(installer.InstallError, match="exact intent"):
+        installer.install(**{**bound_args, **release_args(inputs.build(variant="different"))})
+
+    # A missing source disables inventory availability, but the optional binding
+    # should neither change unit ownership nor impede signed release operations.
+    hidden = inventory_credential.rename(inventory_credential.with_name("temporarily-missing"))
+    candidate = release_args(inputs.build(version=NEXT_RELEASE))
+    assert upgrade(**candidate)["changed"] == 1
+    assert rollback(target=__version__)["changed"] == 1
+    assert installer.install(**args)["changed"] == 0
+    assert unit.read_bytes() == content
+    hidden.rename(inventory_credential)
+    inode = inventory_credential.stat().st_ino
+
+    plan = remove(plan=True)
+    assert str(inventory_credential) not in json.dumps(plan)
+    export = tmp_path / "protected-export.json"
+    removed = remove(export_config=export)
+    assert removed["changed"] == 1
+    assert str(inventory_credential) not in json.dumps(removed)
+    assert remove()["changed"] == 0
+    assert inventory_credential.stat().st_ino == inode
+    assert stat.S_IMODE(export.stat().st_mode) == 0o600
+    assert json.loads(export.read_bytes())["credential_refs"]["inventory_token_file"] == str(
+        inventory_credential
+    )
+
+
+@pytest.mark.parametrize(
+    "problem",
+    ["relative", "public", "symlink", "directory", "oversized", "same-identity", "same-ref"],
+)
+def test_inventory_binding_rejects_unsafe_credentials(inputs, host, inventory_credential, problem):
+    args = inputs.build()
+    path = inventory_credential
+    if problem == "relative":
+        path = Path(path.name)
+    elif problem == "public":
+        path.chmod(0o644)
+    elif problem == "symlink":
+        target = path.rename(path.with_name("inventory-source"))
+        path.symlink_to(target)
+    elif problem == "directory":
+        path.unlink()
+        path.mkdir(mode=0o700)
+    elif problem == "oversized":
+        path.write_bytes(b"x" * 1025)
+    elif problem == "same-identity":
+        path.write_text(API_TOKEN)
+    else:
+        path = args["token_file"]
+    with pytest.raises(native.PreflightError, match="PVE|credential"):
+        installer.install(**args, inventory_token_file=path)
+    assert not host.commands
+    assert not host.paths["config"].exists()
+
+
+@pytest.mark.parametrize("failure", ["reload", "start", "interruption"])
+def test_inventory_binding_rolls_back_or_resumes_exact_op(
+    inputs, host, inventory_credential, monkeypatch, failure
+):
+    from steward.core.pve_native_lifecycle import load_journal
+
+    args = inputs.build()
+    installer.install(**args)
+    unit = host.unit_dir / AGENT_UNIT
+    prior = unit.read_bytes()
+    bound_args = {**args, "inventory_token_file": inventory_credential}
+    original = installer._checked
+    call = "start" if failure == "start" else "daemon-reload"
+
+    def fail_binding(argv, error, **kwargs):
+        if argv[3] == call and unit.read_bytes() != prior:
+            if failure == "interruption":
+                raise KeyboardInterrupt
+            raise installer.InstallError(error)
+        return original(argv, error, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(installer, "_checked", fail_binding)
+        if failure == "interruption":
+            with pytest.raises(KeyboardInterrupt):
+                installer.install(**bound_args)
+            assert load_journal(host.paths["config"])["operation"]["phase"] == "activate"
+            with pytest.raises(installer.InstallError, match="exact intent"):
+                installer.install(**args)
+        else:
+            with pytest.raises(installer.InstallError, match="former agent unit was restored"):
+                installer.install(**bound_args)
+            assert unit.read_bytes() == prior
+            assert host.active == {AGENT_UNIT}
+            assert load_journal(host.paths["config"])["operation"] is None
+
+    assert installer.install(**bound_args)["changed"] == 1
+    assert b"pve-inventory-token" in unit.read_bytes()
+    assert load_journal(host.paths["config"])["operation"] is None
+
+
+def test_inventory_binding_can_restore_after_interruption_and_missing_source(
+    inputs, host, inventory_credential, monkeypatch
+):
+    from steward.core.pve_native_lifecycle import load_journal, upgrade
+    from steward.core.pve_native_remove import remove
+
+    args = inputs.build()
+    installer.install(**args)
+    unit = host.unit_dir / AGENT_UNIT
+    prior = unit.read_bytes()
+    bound_args = {**args, "inventory_token_file": inventory_credential}
+    original = installer._checked
+
+    def fail_binding_and_restore(argv, error, **kwargs):
+        if argv[3] == "daemon-reload":
+            raise installer.InstallError(error)
+        return original(argv, error, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(installer, "_checked", fail_binding_and_restore)
+        with pytest.raises(installer.InstallError, match="restoration is pending"):
+            installer.install(**bound_args)
+
+    assert load_journal(host.paths["config"])["operation"]["phase"] == "restore"
+    with pytest.raises(installer.InstallError, match="Resume the exact operation"):
+        upgrade(**release_args(inputs.build(version=NEXT_RELEASE)))
+    with pytest.raises(installer.InstallError, match="Resume the exact operation"):
+        remove(plan=True)
+    inventory_credential.unlink()
+    monkeypatch.setattr(native, "_probe_api", lambda *_: pytest.fail("restoration is local"))
+    with pytest.raises(installer.InstallError, match="former agent unit was restored"):
+        installer.install(**bound_args)
+    assert unit.read_bytes() == prior
+    assert host.active == {AGENT_UNIT}
+    assert load_journal(host.paths["config"])["operation"] is None

@@ -74,7 +74,14 @@ def _export_bytes(journal: dict) -> bytes:
             "profile": native.PROFILE,
             "mode": intent["mode"],
             "api": {"host": native.API_HOST, "port": native.API_PORT, "name": intent["api_name"]},
-            "credential_refs": _refs(journal),
+            "credential_refs": {
+                **_refs(journal),
+                **(
+                    {"inventory_token_file": intent["inventory_token_file"]}
+                    if "inventory_token_file" in intent
+                    else {}
+                ),
+            },
         }
     )
 
@@ -318,6 +325,8 @@ def _remove_locked(plan: bool, export_config: Path | None) -> dict:
     config = paths["config"]
     root = paths["install"]
     journal = lifecycle.load_journal(config)
+    if journal["operation"] and journal["operation"]["kind"] == "inventory":
+        lifecycle._require_idle(journal)
     op = _operation(journal)
     phase = op["phase"] if op else None
     quarantine = root.parent / f".{root.name}-remove-{journal['reservation']}"

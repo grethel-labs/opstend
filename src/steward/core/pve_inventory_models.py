@@ -20,7 +20,7 @@ EvidenceState = Literal[
     "observed", "absent", "restricted", "missing", "unavailable", "invalid", "budget"
 ]
 EvidenceSource = Literal[
-    "cluster_resources", "guest_config", "guest_rrd", "guest_tasks", "permissions"
+    "cluster_resources", "node_rrd", "guest_config", "guest_rrd", "guest_tasks", "permissions"
 ]
 GuestKind = Literal["qemu", "lxc"]
 ResourceName = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")]
@@ -58,6 +58,20 @@ class Evidence(TimedProjection):
     state: EvidenceState
 
 
+class NodeMeasurementPoint(Projection):
+    time: AwareDatetime
+    cpu_fraction: Quantity | None = None
+    memory_bytes: Quantity | None = None
+    max_memory_bytes: Quantity | None = None
+    disk_bytes: Quantity | None = None
+    max_disk_bytes: Quantity | None = None
+
+
+class NodeMeasurementObservation(Projection):
+    evidence: Evidence
+    items: tuple[NodeMeasurementPoint, ...] = Field(default=(), max_length=MAX_POINTS)
+
+
 class Node(Projection):
     evidence: Evidence
     node: NodeName
@@ -66,6 +80,7 @@ class Node(Projection):
     max_memory_bytes: Count | None = None
     max_disk_bytes: Count | None = None
     uptime_seconds: Count | None = None
+    measurements: NodeMeasurementObservation | None = None
 
 
 class NetworkAttachment(Projection):
@@ -325,6 +340,22 @@ def _timestamp(value: object) -> datetime:
     if type(value) is not int or not 0 <= value <= 253_402_300_799:
         raise ValueError("invalid inventory timestamp")
     return datetime.fromtimestamp(value, UTC)
+
+
+def parse_node_measurements(data: object) -> tuple[NodeMeasurementPoint, ...]:
+    points = []
+    for row in _rows(data, MAX_POINTS):
+        timestamp = _timestamp(row.get("time"))
+        values = {
+            "cpu_fraction": row.get("cpu"),
+            "memory_bytes": row.get("memused"),
+            "max_memory_bytes": row.get("memtotal"),
+            "disk_bytes": row.get("rootused"),
+            "max_disk_bytes": row.get("roottotal"),
+        }
+        if any(value is not None for value in values.values()):
+            points.append(NodeMeasurementPoint(time=timestamp, **values))
+    return tuple(sorted(_unique(points, lambda item: item.time), key=lambda item: item.time))
 
 
 def parse_measurements(data: object, *, registered_after: int) -> tuple[MeasurementPoint, ...]:

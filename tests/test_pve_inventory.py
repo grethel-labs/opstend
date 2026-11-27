@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,7 @@ from test_pve_native import token_file as token_file
 READ_TOKEN = "px02@pve!inventory=14aa8f43-4390-4b66-875f-464814c048de"
 NODE = "pve-rc2"
 NODE_PERMISSIONS = f"{PERMISSIONS_PATH}?path=/nodes/{NODE}"
+NODE_RRD = f"/api2/json/nodes/{NODE}/rrddata?timeframe=hour&cf=AVERAGE"
 INDEX = "/api2/json/cluster/resources"
 VM = f"/api2/json/nodes/{NODE}/qemu/190"
 CT = f"/api2/json/nodes/{NODE}/lxc/191"
@@ -87,7 +89,7 @@ def local_target(pve_api, token_file, tmp_path):
             f"{PERMISSIONS_PATH}?path=/nodes/hidden-node": payload({"/nodes/hidden-node": {}}),
             INDEX: payload(
                 [
-                    node(NODE),
+                    {**node(NODE), "uptime": 121},
                     node("hidden-node"),
                     guest("qemu", 190),
                     guest("lxc", 191),
@@ -112,6 +114,21 @@ def local_target(pve_api, token_file, tmp_path):
                         "maxdisk": 8192,
                     },
                     {"id": "network/ignore-canary", "type": "network", "password": "raw-canary"},
+                ]
+            ),
+            NODE_RRD: payload(
+                [
+                    {
+                        "time": 1_790_000_060,
+                        "cpu": 0.25,
+                        "memused": 4096.5,
+                        "memtotal": 8192,
+                        "rootused": 1000,
+                        "roottotal": 16384.5,
+                        "memhost": 9_765_432,
+                    },
+                    {"time": 1_790_000_000, "cpu": 0},
+                    {"time": 1_790_000_120},
                 ]
             ),
             VM + "/config?current=1": payload(
@@ -157,6 +174,17 @@ def test_inventory_projects_authorized_resources_with_scoped_guest_details(local
     assert inventory.evidence.state == "observed"
     assert inventory.coverage == "token_scope"
     assert [item.node for item in inventory.nodes] == [NODE]
+    measured_node = inventory.nodes[0]
+    assert measured_node.uptime_seconds == 121
+    assert measured_node.measurements.evidence.source == "node_rrd"
+    assert measured_node.measurements.evidence.state == "observed"
+    sparse, full = measured_node.measurements.items
+    assert sparse.cpu_fraction == 0
+    assert sparse.memory_bytes is None
+    assert full.time == datetime.fromtimestamp(1_790_000_060, UTC)
+    assert full.cpu_fraction == 0.25
+    assert (full.memory_bytes, full.max_memory_bytes) == (4096.5, 8192)
+    assert (full.disk_bytes, full.max_disk_bytes) == (1000, 16384.5)
     assert [item.pool for item in inventory.pools] == ["rc2-visible"]
     assert [item.storage for item in inventory.datastores] == ["local-lvm"]
     assert inventory.datastores[0].max_disk_bytes == 8192
@@ -202,6 +230,11 @@ def test_inventory_projects_authorized_resources_with_scoped_guest_details(local
     assert any(path == INDEX for _, path, _ in calls)
     assert all("/192" not in path and "vmid=192" not in path for _, path, _ in calls)
     assert all("/pools/" not in path for _, path, _ in calls)
+    paths = [path for _, path, _ in calls]
+    assert paths.count(NODE_RRD) == 1
+    initial_audit, final_audit = [i for i, path in enumerate(paths) if path == NODE_PERMISSIONS]
+    assert initial_audit < paths.index(NODE_RRD) < final_audit
+    assert all("/nodes/hidden-node/" not in path for path in paths)
 
 
 @pytest.mark.parametrize(
@@ -244,6 +277,72 @@ def test_task_scope_requires_sys_audit_even_when_the_pve_index_lists_node(local_
     assert {item.vmid for item in inventory.guests} == {190, 191}
     assert all(item.tasks.evidence.state == "restricted" for item in inventory.guests)
     assert all(not path.startswith(TASKS) for _, path, _ in calls)
+    assert all(path != NODE_RRD for _, path, _ in calls)
+
+
+def test_node_rrd_requires_exact_audit_even_with_an_inherited_grant(local_target):
+    target, responses, calls = local_target
+    rights = json.loads(responses[PERMISSIONS_PATH][1])["data"]
+    del rights[f"/nodes/{NODE}"]
+    rights["/nodes"] = {"Sys.Audit": 1}
+    responses[PERMISSIONS_PATH] = payload(rights)
+    responses[NODE_PERMISSIONS] = payload({f"/nodes/{NODE}": {}})
+
+    inventory = pve_inventory.collect_inventory(target)
+
+    assert not inventory.nodes
+    assert {item.vmid for item in inventory.guests} == {190, 191}
+    assert any(path == NODE_PERMISSIONS for _, path, _ in calls)
+    assert all(path != NODE_RRD for _, path, _ in calls)
+
+
+@pytest.mark.parametrize("final_change", ["exact_audit", "roster"])
+def test_node_rrd_is_discarded_without_final_audit_and_roster(
+    local_target, monkeypatch, final_change
+):
+    target, responses, calls = local_target
+    original_read = pve_inventory._read_api_response
+
+    def change_scope_after_rrd(api_name, context, token, path, **limits):
+        result = original_read(api_name, context, token, path, **limits)
+        if path == NODE_RRD:
+            if final_change == "exact_audit":
+                responses[NODE_PERMISSIONS] = payload({f"/nodes/{NODE}": {}})
+            else:
+                rows = json.loads(responses[INDEX][1])["data"]
+                responses[INDEX] = payload([row for row in rows if row["id"] != f"node/{NODE}"])
+        return result
+
+    monkeypatch.setattr(pve_inventory, "_read_api_response", change_scope_after_rrd)
+    inventory = pve_inventory.collect_inventory(target)
+
+    assert any(path == NODE_RRD for _, path, _ in calls)
+    assert not inventory.nodes
+    assert {item.vmid for item in inventory.guests} == {190, 191}
+    assert "node_rrd" not in inventory.model_dump_json()
+    if final_change == "exact_audit":
+        assert all(item.tasks.evidence.state == "restricted" for item in inventory.guests)
+
+
+@pytest.mark.parametrize(
+    ("result", "state"),
+    [
+        ((403, b""), "restricted"),
+        ((429, b""), "unavailable"),
+        (payload([{"time": 1_790_000_000, "memused": "4096"}]), "invalid"),
+        (payload([{"time": i, "cpu": 0} for i in range(65)]), "invalid"),
+        (payload([{"time": 1_790_000_000, "memused": None}]), "absent"),
+    ],
+)
+def test_node_read_preserves_evidence_when_measurements_are_missing(local_target, result, state):
+    target, responses, _ = local_target
+    responses[NODE_RRD] = result
+
+    inventory = pve_inventory.collect_inventory(target)
+
+    assert inventory.nodes[0].uptime_seconds == 121
+    assert inventory.nodes[0].measurements.evidence.state == state
+    assert not inventory.nodes[0].measurements.items
 
 
 def test_collection_refuses_non_read_privileges(local_target):
@@ -470,6 +569,8 @@ def test_collection_reserves_time_for_visibility_after_detail_budget(local_targe
     assert all(deadline <= 600 + pve_inventory._TIMEOUT for _, deadline in calls)
     vm = next(item for item in inventory.guests if item.vmid == 190)
     assert vm.measurements.evidence.state == "budget"
+    assert inventory.nodes[0].measurements.evidence.state == "budget"
+    assert all(path != NODE_RRD for path, _ in calls)
 
 
 @pytest.mark.parametrize("problem", ["wrong-name", "wrong-ca", "same-token-id", "public-token"])

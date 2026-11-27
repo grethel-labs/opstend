@@ -194,3 +194,50 @@ ssh -N -L 127.0.0.1:8447:127.0.0.1:8447 operator@pve.example.net
 Status reports the latest local TLS, token permission and API version
 checks and their observation timestamp. An observation becomes stale after
 90 seconds or a reboot. Missing or unreadable observations are unavailable.
+
+## Read the PVE inventory
+
+Inventory is optional in both native modes. For the signed install, add
+`--inventory-token-file /root/opstend-inputs/pve-inventory-token`. Use a
+different privilege-separated token from the health token. Give inventory only
+the audit permissions needed for its scope (`VM.Audit`, `Sys.Audit`,
+`Datastore.Audit`, and `Pool.Audit`). The token and its PVE user must both have
+the intended access. Use a private root-owned file as for the health token.
+Only the agent receives it. [PVE user and token management](https://github.com/proxmox/pve-docs/blob/master/pveum.adoc)
+
+On a PX01 installation, upgrade to an inventory-capable signed release. Use
+the matching native installer in the trusted bootstrap environment to repeat
+the signed `install` invocation with the active release and matching
+wheelhouse, the existing installation options, and the additional inventory
+token file. The installer records the reference and restarts the native
+agent. Repeat the same invocation to resume an interruption. Later upgrades
+and install repeats preserve the reference. To rotate the token, replace the
+contents at the same protected path and restart the native agent. Keep it a
+private regular file with one valid token line. A missing file or a malformed
+token line of at most 1 KiB leaves the health check available. If a root change
+makes systemd's credential loader fail, for example by replacing the token
+with a file larger than systemd's 1 MiB credential limit, the agent cannot
+restart until the source is restored or removed.
+[systemd 257 credential loader](https://github.com/systemd/systemd/blob/v257/src/core/exec-credential.c#L595-L619)
+
+```sh
+/opt/opstend-pve/current/venv/bin/python -I -B -m steward.cli.main pve-native inventory
+/opt/opstend-pve/current/venv/bin/python -I -B -m steward.cli.main pve-native inventory --vmid 123
+```
+
+These commands require root and return JSON. Standalone mode links to
+`/inventory` from the authenticated home page and to each visible guest's
+`/guests/<vmid>` page from that inventory. Send `Accept: application/json` on
+either authenticated HTTPS route to get the same JSON as the CLI. The routes
+return HTTP 200 for inventory read outcomes, with `status` indicating
+`observed`, `absent`, `restricted`, `unavailable`, or `stale`. An empty
+observed inventory describes the token's scope. A guest outside it and a
+guest ID that was never observed have the same detail response.
+
+The agent keeps one bounded snapshot. Unavailable or restricted reads suppress
+the previous resource rows. A snapshot older than 90 seconds or from a prior
+boot is stale and shows no resource rows. Nodes with `Sys.Audit` can include up
+to an hour of CPU fractions and memory and root filesystem measurements in
+bytes. Guest details show PVE evidence for network attachments, measurements
+and matching tasks where supported by the observed privileges and guest
+registration. Guest OS and in-guest details are unverified in this profile.
