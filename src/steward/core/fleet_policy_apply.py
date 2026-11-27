@@ -12,6 +12,13 @@ from uuid import uuid4
 from pydantic import TypeAdapter
 
 from .canonical import canonical_json, revision_id
+from .fleet_enrollment import (
+    FleetEnrollmentConflict,
+    FleetGrant,
+    policy_target_active,
+    policy_target_bound,
+    policy_target_grant,
+)
 from .fleet_identity import FleetIdentityRegistry
 from .fleet_policy import (
     EffectiveFleetPolicy,
@@ -29,10 +36,20 @@ from .fleet_policy import (
     _resolve,
     _target_record,
 )
+from .fleet_policy_reconcile import (
+    CLAIM_SECONDS,
+    MAX_POLICY_SYNC_BYTES,
+    FleetPolicyClaim,
+    FleetPolicyOutcome,
+    FleetPolicyReceipt,
+    FleetPolicySyncReply,
+    FleetPolicySyncRequest,
+)
+from .fleet_policy_target import FleetPolicyTargetState
 from .pve_inventory_models import Projection
 
 if TYPE_CHECKING:
-    from .fleet_policy_target import FleetPolicyTargetState, FleetPolicyTargetStore
+    from .fleet_policy_target import FleetPolicyTargetStore
 
 _PLAN_LIFETIME = timedelta(minutes=5)
 _NAME = TypeAdapter(PolicyName)
@@ -83,6 +100,9 @@ class FleetPolicyTargetView(Projection):
     group_ids: tuple[PolicyName, ...]
     applied_revision: RevisionId | None
     can_write: bool
+    local_revision: RevisionId | None = None
+    observed_at: datetime | None = None
+    conflict_owner: Literal["local_operator"] | None = None
 
 
 class FleetPolicyHead(Projection):
@@ -95,6 +115,7 @@ class FleetPolicyHead(Projection):
 class FleetPolicyPlanTarget(Projection):
     target: FleetTarget
     applied_revision: RevisionId | None
+    applied_approval_id: RegistryId | None = None
     local_revision: RevisionId | None
     observed_at: datetime | None
     effective: EffectiveFleetPolicy
@@ -108,12 +129,6 @@ class _PlanBody(Projection):
 
 class FleetPolicyPlan(_PlanBody):
     digest: RevisionId
-
-
-class FleetPolicyOutcome(Projection):
-    target: FleetTarget
-    status: Literal["pending", "applied", "rejected"]
-    reason: str | None
 
 
 class FleetPolicyApproval(Projection):
@@ -161,7 +176,10 @@ def _report(
 
 
 def _save_report(
-    db: sqlite3.Connection, local: FleetLocalPolicy, applied_revision: str | None
+    db: sqlite3.Connection,
+    local: FleetLocalPolicy,
+    applied_revision: str | None,
+    approval_id: str | None,
 ) -> None:
     db.execute(
         """INSERT INTO fleet_policy_reports (kind, target_id, generation, local, applied_revision)
@@ -169,6 +187,54 @@ def _save_report(
            DO UPDATE SET local = excluded.local, applied_revision = excluded.applied_revision""",
         (*_coordinates(local.target), local.model_dump_json(), applied_revision),
     )
+
+    db.execute(
+        """INSERT INTO fleet_policy_report_state (kind, target_id, generation, approval_id)
+           VALUES (?, ?, ?, ?) ON CONFLICT (kind, target_id, generation)
+           DO UPDATE SET approval_id = excluded.approval_id""",
+        (*_coordinates(local.target), approval_id),
+    )
+
+
+def _reported_approval(db: sqlite3.Connection, target: FleetTarget) -> str | None:
+    row = db.execute(
+        """SELECT approval_id FROM fleet_policy_report_state
+           WHERE kind = ? AND target_id = ? AND generation = ?""",
+        _coordinates(target),
+    ).fetchone()
+    return row["approval_id"] if row is not None else None
+
+
+def _local_conflict(
+    db: sqlite3.Connection, local: FleetLocalPolicy, applied: str | None, head: str
+) -> Literal["local_operator"] | None:
+    approval_id = _reported_approval(db, local.target)
+    reviews = db.execute(
+        """WITH reviews AS (
+               SELECT p.digest, p.revision, a.id, o.status, a.rowid AS sequence
+               FROM fleet_policy_outcomes AS o
+               JOIN fleet_policy_approvals AS a ON a.id = o.approval_id
+               JOIN fleet_policy_plans AS p ON p.digest = a.digest
+               WHERE o.kind = ? AND o.target_id = ? AND o.generation = ?
+           )
+           SELECT digest FROM (
+               SELECT digest FROM reviews
+               WHERE id = ? OR (? IS NULL AND revision = ? AND status = 'applied')
+               ORDER BY sequence DESC LIMIT 1
+           )
+           UNION
+           SELECT digest FROM (
+               SELECT digest FROM reviews WHERE revision = ? ORDER BY sequence DESC LIMIT 1
+           )""",
+        (*_coordinates(local.target), approval_id, approval_id, applied, head),
+    )
+    for row in reviews:
+        reviewed = next(
+            item for item in _load_plan(db, row["digest"]).targets if item.target == local.target
+        )
+        if reviewed.local_revision is not None and reviewed.local_revision != local.revision:
+            return "local_operator"
+    return None
 
 
 class _Access:
@@ -216,9 +282,11 @@ def _load_plan(db: sqlite3.Connection, digest: str) -> FleetPolicyPlan:
     if row is None:
         raise _missing()
     body = _PlanBody.model_validate_json(row["body"])
-    if revision_id(body.model_dump(mode="json")) != digest:
+    if revision_id(body.model_dump(mode="json", exclude_unset=True)) != digest:
         raise _missing()
-    return FleetPolicyPlan(digest=digest, **dict(body))
+    return FleetPolicyPlan(
+        digest=digest, revision=body.revision, expires_at=body.expires_at, targets=body.targets
+    )
 
 
 def _outcome(row: sqlite3.Row) -> FleetPolicyOutcome:
@@ -226,6 +294,7 @@ def _outcome(row: sqlite3.Row) -> FleetPolicyOutcome:
         target=FleetTarget(kind=row["kind"], id=row["target_id"], generation=row["generation"]),
         status=row["status"],
         reason=row["reason"],
+        conflict_owner="local_operator" if row["reason"] == "local_revision_changed" else None,
     )
 
 
@@ -334,7 +403,7 @@ class FleetPolicyApply:
             for target, item in access.targets.items():
                 record = _target_record(db, target)
                 if record is not None and access.allows(target, record):
-                    _, applied = _report(db, target)
+                    local, applied = _report(db, target)
                     targets.append(
                         FleetPolicyTargetView(
                             target=target,
@@ -342,6 +411,11 @@ class FleetPolicyApply:
                             group_ids=item.group_ids,
                             applied_revision=applied,
                             can_write=access.allows(target, record, write=True),
+                            local_revision=local.revision if local is not None else None,
+                            observed_at=local.observed_at if local is not None else None,
+                            conflict_owner=_local_conflict(db, local, applied, access.record.id)
+                            if local is not None and access.record is not None
+                            else None,
                         )
                     )
             if access.coordinator:
@@ -433,6 +507,7 @@ class FleetPolicyApply:
                     FleetPolicyPlanTarget(
                         target=target,
                         applied_revision=applied,
+                        applied_approval_id=_reported_approval(db, target),
                         local_revision=local_revision,
                         observed_at=local.observed_at if local is not None else None,
                         effective=_resolve(
@@ -451,7 +526,12 @@ class FleetPolicyApply:
                    ON CONFLICT DO NOTHING""",
                 (digest, revision, canonical_json(payload)),
             )
-            return FleetPolicyPlan(digest=digest, **dict(body))
+            return FleetPolicyPlan(
+                digest=digest,
+                revision=body.revision,
+                expires_at=body.expires_at,
+                targets=body.targets,
+            )
 
     def approve(self, actor: FleetPolicyActor, digest: str, key: str) -> FleetPolicyApproval:
         _NAME.validate_python(key, strict=True)
@@ -517,7 +597,9 @@ class FleetPolicyApply:
             state = target_store.read(db, self._now())
             if _target_record(db, state.local.target) is None:
                 raise _missing()
-            _save_report(db, state.local, state.applied_revision)
+            if policy_target_bound(db, state.local.target):
+                raise FleetPolicyDenied("the target uses remote policy reconciliation")
+            _save_report(db, state.local, state.applied_revision, state.approval_id)
             return state
 
     def adopt_local(
@@ -527,6 +609,8 @@ class FleetPolicyApply:
             now = self._now()
             state = target_store.read(db, now)
             target = state.local.target
+            if policy_target_bound(db, target):
+                raise FleetPolicyDenied("the target uses remote policy reconciliation")
             approved = db.execute(
                 """SELECT subject, coordinator, actor_source FROM fleet_policy_approvals
                    WHERE id = ? AND digest = ?""",
@@ -557,9 +641,9 @@ class FleetPolicyApply:
             )
             if reason is None:
                 target_store.apply(db, reviewed.effective, approval_id)
-                _save_report(db, state.local, plan.revision)
+                _save_report(db, state.local, plan.revision, approval_id)
             elif record is not None:
-                _save_report(db, state.local, state.applied_revision)
+                _save_report(db, state.local, state.applied_revision, state.approval_id)
 
             status = "applied" if reason is None else "rejected"
             db.execute(
@@ -567,7 +651,284 @@ class FleetPolicyApply:
                    WHERE approval_id = ? AND kind = ? AND target_id = ? AND generation = ?""",
                 (status, reason, approval_id, *_coordinates(target)),
             )
-            return FleetPolicyOutcome(target=target, status=status, reason=reason)
+            return FleetPolicyOutcome(
+                target=target,
+                status=status,
+                reason=reason,
+                conflict_owner="local_operator" if reason == "local_revision_changed" else None,
+            )
+
+    def reconcile_target(
+        self, fingerprint: str, request: FleetPolicySyncRequest
+    ) -> FleetPolicySyncReply:
+        target = request.local.target
+        with self._registry._write() as db:
+            try:
+                grant = policy_target_grant(db, fingerprint, target)
+            except FleetEnrollmentConflict:
+                raise FleetPolicyDenied(
+                    "client has no current grant for this policy target"
+                ) from None
+
+            previous = _remote_report(db, grant.agent_id, request)
+            settled = _settle_receipt(db, grant.agent_id, target, request.receipt)
+            response = {
+                "sequence": request.sequence,
+                "target": target,
+                "acknowledged_receipt": request.receipt.claim_id if settled else None,
+            }
+            now = self._now()
+            observed = request.local.model_copy(update={"observed_at": now})
+            report_ready = _record_remote_report(db, grant.agent_id, request, previous, observed)
+            if request.approval_id is None:
+                return FleetPolicySyncReply(outcome=settled, **response)
+            if not report_ready:
+                return FleetPolicySyncReply(
+                    outcome=FleetPolicyOutcome(
+                        target=target, status="pending", reason="stale_report"
+                    ),
+                    **response,
+                )
+            outcome, claim = self._claim_remote(db, grant, request, observed, now)
+            return FleetPolicySyncReply(outcome=outcome, claim=claim, **response)
+
+    def _claim_remote(
+        self,
+        db: sqlite3.Connection,
+        grant: FleetGrant,
+        request: FleetPolicySyncRequest,
+        observed: FleetLocalPolicy,
+        now: datetime,
+    ) -> tuple[FleetPolicyOutcome, FleetPolicyClaim | None]:
+        approval_id, digest = request.approval_id, request.digest
+        assert approval_id is not None and digest is not None
+        target = request.local.target
+        approved = db.execute(
+            """SELECT subject, coordinator, actor_source FROM fleet_policy_approvals
+               WHERE id = ? AND digest = ?""",
+            (approval_id, digest),
+        ).fetchone()
+        result = _selected_outcome(db, approval_id, target)
+        if approved is None or result is None:
+            return FleetPolicyOutcome(
+                target=target, status="rejected", reason="approval_unavailable"
+            ), None
+        if result["status"] != "pending":
+            return _outcome(result), None
+
+        plan = _load_plan(db, digest)
+        reviewed = next(item for item in plan.targets if item.target == target)
+        record = _target_record(db, target)
+        actor = FleetPolicyActor(
+            approved["subject"], bool(approved["coordinator"]), approved["actor_source"]
+        )
+        access = _Access(db, actor)
+        state = FleetPolicyTargetState(
+            local=observed,
+            applied_revision=request.applied_revision,
+            approval_id=request.applied_approval_id,
+            effective=None,
+        )
+        if not policy_target_active(db, target, grant.host_id):
+            reason = "target_unavailable"
+        elif actor.coordinator and not access.coordinator:
+            reason = "approval_scope_revoked"
+        else:
+            reason = _admission_issue(db, access, reviewed, plan, state, record, now)
+
+        remaining_ms = min(
+            CLAIM_SECONDS * 1000, (plan.expires_at - self._now()) // timedelta(milliseconds=1)
+        )
+        if reason is None and remaining_ms < 1:
+            reason = "approval_expired"
+        if reason is not None:
+            # An ordered report from the same serialized target proves earlier
+            # claims have either been reported or never applied. A claim owned by
+            # another agent may still have a result this agent cannot report.
+            has_claim = db.execute(
+                """SELECT 1 FROM fleet_policy_remote_claims
+                   WHERE approval_id = ? AND kind = ? AND target_id = ? AND generation = ?
+                     AND agent_id != ? LIMIT 1""",
+                (approval_id, *_coordinates(target), grant.agent_id),
+            ).fetchone()
+            if has_claim is None:
+                _set_outcome(db, approval_id, target, "rejected", reason)
+            return FleetPolicyOutcome(
+                target=target,
+                status="pending" if has_claim else "rejected",
+                reason=reason,
+                conflict_owner="local_operator" if reason == "local_revision_changed" else None,
+            ), None
+
+        receipt = FleetPolicyReceipt(
+            claim_id=uuid4().hex,
+            sequence=request.sequence,
+            approval_id=approval_id,
+            digest=digest,
+            local_revision=request.local.revision,
+            effective_digest=revision_id(reviewed.effective.model_dump(mode="json")),
+        )
+        claim = FleetPolicyClaim(
+            **dict(receipt),
+            effective=reviewed.effective,
+            prior_applied_revision=request.applied_revision,
+            prior_applied_approval_id=request.applied_approval_id,
+            prior_effective_digest=request.effective_digest,
+            expires_at=plan.expires_at,
+            valid_for_ms=remaining_ms,
+        )
+        outcome = FleetPolicyOutcome(target=target, status="pending", reason="awaiting_receipt")
+        candidate_reply = FleetPolicySyncReply(
+            sequence=request.sequence,
+            target=target,
+            claim=claim,
+            outcome=outcome,
+            acknowledged_receipt=request.receipt.claim_id if request.receipt is not None else None,
+        )
+        if len(candidate_reply.model_dump_json().encode()) > MAX_POLICY_SYNC_BYTES:
+            return FleetPolicyOutcome(
+                target=target, status="pending", reason="claim_too_large"
+            ), None
+
+        db.execute(
+            """INSERT INTO fleet_policy_remote_claims
+               (id, agent_id, grant_generation, approval_id, kind, target_id, generation,
+                sequence, receipt)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                receipt.claim_id,
+                grant.agent_id,
+                grant.generation,
+                approval_id,
+                *_coordinates(target),
+                request.sequence,
+                receipt.model_dump_json(),
+            ),
+        )
+        _set_outcome(db, approval_id, target, "pending", outcome.reason)
+        return outcome, claim
+
+
+def _selected_outcome(
+    db: sqlite3.Connection, approval_id: str, target: FleetTarget
+) -> sqlite3.Row | None:
+    return db.execute(
+        """SELECT kind, target_id, generation, status, reason FROM fleet_policy_outcomes
+           WHERE approval_id = ? AND kind = ? AND target_id = ? AND generation = ?""",
+        (approval_id, *_coordinates(target)),
+    ).fetchone()
+
+
+def _set_outcome(
+    db: sqlite3.Connection,
+    approval_id: str,
+    target: FleetTarget,
+    status: str,
+    reason: str | None,
+) -> None:
+    db.execute(
+        """UPDATE fleet_policy_outcomes SET status = ?, reason = ?
+           WHERE approval_id = ? AND kind = ? AND target_id = ? AND generation = ?
+             AND status = 'pending'""",
+        (status, reason, approval_id, *_coordinates(target)),
+    )
+
+
+def _settle_receipt(
+    db: sqlite3.Connection, agent_id: str, target: FleetTarget, receipt: FleetPolicyReceipt | None
+) -> FleetPolicyOutcome | None:
+    if receipt is None:
+        return None
+    row = db.execute(
+        """SELECT receipt FROM fleet_policy_remote_claims
+           WHERE id = ? AND agent_id = ? AND kind = ? AND target_id = ? AND generation = ?""",
+        (receipt.claim_id, agent_id, *_coordinates(target)),
+    ).fetchone()
+    if row is None or FleetPolicyReceipt.model_validate_json(row["receipt"]) != receipt:
+        raise FleetPolicyDenied("receipt does not match a durable policy claim")
+    result = _selected_outcome(db, receipt.approval_id, target)
+    if result is None or result["status"] == "rejected":
+        raise FleetPolicyDenied("receipt does not match an admitted policy outcome")
+    _set_outcome(db, receipt.approval_id, target, "applied", None)
+    return FleetPolicyOutcome(target=target, status="applied", reason=None)
+
+
+def _remote_report(
+    db: sqlite3.Connection, agent_id: str, request: FleetPolicySyncRequest
+) -> sqlite3.Row | None:
+    row = db.execute(
+        """SELECT sequence, request FROM fleet_policy_remote_reports
+           WHERE kind = ? AND target_id = ? AND generation = ? AND agent_id = ?""",
+        (*_coordinates(request.local.target), agent_id),
+    ).fetchone()
+    if (
+        row is not None
+        and row["sequence"] == request.sequence
+        and FleetPolicySyncRequest.model_validate_json(row["request"]) != request
+    ):
+        raise FleetPolicyDenied("conflicting target policy report for the same sequence")
+    return row
+
+
+def _record_remote_report(
+    db: sqlite3.Connection,
+    agent_id: str,
+    request: FleetPolicySyncRequest,
+    previous: sqlite3.Row | None,
+    observed: FleetLocalPolicy,
+) -> bool:
+    if previous is not None and request.sequence <= previous["sequence"]:
+        return False
+
+    target = request.local.target
+    reported, applied = _report(db, target)
+    approval_id = _reported_approval(db, target)
+    applied_changed = applied != request.applied_revision or (
+        approval_id is not None and approval_id != request.applied_approval_id
+    )
+    if (
+        reported is not None
+        and applied_changed
+        and (
+            request.receipt is None
+            or (previous is not None and request.receipt.sequence < previous["sequence"])
+        )
+    ):
+        # A delayed receipt can settle its own outcome without replacing newer
+        # current-state reports with the earlier claim's state.
+        return False
+
+    if request.applied_approval_id is not None:
+        _verify_reported_adoption(db, request)
+
+    db.execute(
+        """INSERT INTO fleet_policy_remote_reports
+               (kind, target_id, generation, agent_id, sequence, request)
+           VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (kind, target_id, generation, agent_id)
+           DO UPDATE SET sequence = excluded.sequence, request = excluded.request""",
+        (*_coordinates(target), agent_id, request.sequence, request.model_dump_json()),
+    )
+    _save_report(db, observed, request.applied_revision, request.applied_approval_id)
+    return True
+
+
+def _verify_reported_adoption(db: sqlite3.Connection, request: FleetPolicySyncRequest) -> None:
+    row = db.execute(
+        """SELECT a.digest FROM fleet_policy_approvals AS a
+           JOIN fleet_policy_outcomes AS o ON a.id = o.approval_id
+           WHERE a.id = ? AND o.kind = ? AND o.target_id = ? AND o.generation = ?
+             AND o.status = 'applied'""",
+        (request.applied_approval_id, *_coordinates(request.local.target)),
+    ).fetchone()
+    if row is not None:
+        plan = _load_plan(db, row["digest"])
+        reviewed = next(item for item in plan.targets if item.target == request.local.target)
+        if (
+            reviewed.effective.revision == request.applied_revision
+            and revision_id(reviewed.effective.model_dump(mode="json")) == request.effective_digest
+        ):
+            return
+    raise FleetPolicyDenied("target report does not match an applied policy outcome")
 
 
 def _admission_issue(
@@ -591,7 +952,15 @@ def _admission_issue(
         return "review_required"
     local = state.local
     reported, applied = _report(db, local.target)
-    if state.applied_revision != reviewed.applied_revision or applied != reviewed.applied_revision:
+    if (
+        state.applied_revision != reviewed.applied_revision
+        or applied != reviewed.applied_revision
+        or (
+            "applied_approval_id" in reviewed.model_fields_set
+            and state.approval_id != reviewed.applied_approval_id
+            and (reviewed.applied_approval_id is not None or reviewed.applied_revision is None)
+        )
+    ):
         return "applied_revision_changed"
     if (
         local.revision != reviewed.local_revision

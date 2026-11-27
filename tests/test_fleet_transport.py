@@ -16,6 +16,9 @@ from steward.cli import fleet as fleet_cli
 from steward.cli import main as cli
 from steward.core.fleet_enrollment import FleetEnrollment
 from steward.core.fleet_identity import FleetIdentityRegistry
+from steward.core.fleet_policy import FleetPolicy, FleetPolicyValues, FleetTarget, FleetTargetPolicy
+from steward.core.fleet_policy_apply import FleetPolicyActor, FleetPolicyApply
+from steward.core.fleet_policy_target import FleetPolicyTargetConfig, FleetPolicyTargetStore
 from steward.core.pve_inventory_models import Evidence, InventorySnapshot, parse_resources
 from steward.fleet_transport import FleetClient, FleetTransportError, create_server
 
@@ -86,13 +89,14 @@ def tls(tmp_path):
         "first": certificate(tmp_path, "first", authority),
         "next": certificate(tmp_path, "next", authority),
         "wrong": certificate(tmp_path, "wrong", authority),
+        "reader": certificate(tmp_path, "reader", authority),
         "untrusted": certificate(tmp_path, "untrusted", outsider),
         "wrong_ca": outsider_ca,
     }
 
 
 @contextmanager
-def loopback(enrollment, tls):
+def loopback(enrollment, tls, *, include_endpoint=False):
     ca, cert, key = tls["server"]
     with create_server(
         enrollment, bind="127.0.0.1", port=0, cert_file=cert, key_file=key, client_ca_file=ca
@@ -111,7 +115,8 @@ def loopback(enrollment, tls):
             return client, fingerprint
 
         try:
-            yield client
+            endpoint = f"https://127.0.0.1:{server.server_port}"
+            yield (client, endpoint) if include_endpoint else client
         finally:
             server.shutdown()
             thread.join(timeout=2)
@@ -448,3 +453,187 @@ def test_cli_operator_to_connector_preserves_private_inventory_fields(
         invoke("revoke", "--agent-id", agent["id"], "--generation", "1")
         invoke("collect-pve", *collect_args, code=1, database=False)
         assert len(collected) == 1
+
+
+@pytest.mark.parametrize("receipt_delivered", [False, True], ids=["receipt-lost", "ack-lost"])
+def test_mtls_policy_converges_independent_targets_and_recovers_lost_ack(
+    tmp_path, tls, capsys, receipt_delivered
+):
+    registry = FleetIdentityRegistry(tmp_path / "fleet.sqlite")
+    site = registry.register_site("site")
+    first_host, second_host = (
+        registry.register_host(site.id, name) for name in ("first", "second")
+    )
+    first_agent = registry.register_agent(first_host.id, "policy")
+    second_agent = registry.register_agent(second_host.id, "policy")
+    reader_agent = registry.register_agent(first_host.id, "reader")
+    first_target = FleetTarget(kind="host", id=first_host.id)
+    second_target = FleetTarget(kind="host", id=second_host.id)
+    first_path, second_path = tmp_path / "first.sqlite", tmp_path / "second.sqlite"
+    first_config = FleetPolicyTargetConfig(target=first_target, limits=FleetPolicyValues())
+    first_store = FleetPolicyTargetStore.configure(first_path, first_config)
+    second_store = FleetPolicyTargetStore.configure(
+        second_path, FleetPolicyTargetConfig(target=second_target, limits=FleetPolicyValues())
+    )
+    actor = FleetPolicyActor("coordinator", True)
+    service = FleetPolicyApply(registry)
+    enrollment = FleetEnrollment(registry)
+    targets = (first_target, second_target)
+    policy = FleetPolicy(targets=tuple(FleetTargetPolicy(target=t) for t in targets))
+    initial = service.commit(actor, policy, parent=None)
+
+    def target_view(target):
+        return next(item for item in service.head(actor).targets if item.target == target)
+
+    def approval_outcomes(approval):
+        return {item.target: item.status for item in service.approval(actor, approval.id).outcomes}
+
+    with loopback(enrollment, tls, include_endpoint=True) as (client, endpoint):
+        first, first_key = client("first")
+        second, second_key = client("wrong")
+        reader, reader_key = client("reader")
+        for agent, connection, key, target in (
+            (first_agent, first, first_key, first_target),
+            (second_agent, second, second_key, second_target),
+            (reader_agent, reader, reader_key, None),
+        ):
+            invitation = enrollment.issue(
+                agent.id,
+                key_fingerprint=key,
+                capability="policy_target" if target is not None else "heartbeat",
+                target=target,
+            )
+            connection.enroll(invitation.token.get_secret_value())
+
+        def sync_cli(*args):
+            cert, key, _ = tls["first"]
+            parsed = cli.build_parser().parse_args(
+                [
+                    "fleet",
+                    "policy-target-sync",
+                    "--target-db",
+                    str(first_path),
+                    "--endpoint",
+                    endpoint,
+                    "--cert-file",
+                    str(cert),
+                    "--key-file",
+                    str(key),
+                    "--server-ca-file",
+                    str(tls["server"][0]),
+                    *args,
+                ]
+            )
+            result = parsed.func(parsed)
+            return result, capsys.readouterr()
+
+        assert target_view(first_target).local_revision is None
+        assert sync_cli("--approval-id", "incomplete")[0] == 1
+        status, output = sync_cli()
+        assert status == 0
+        assert json.loads(output.out)["target"] == first_target.model_dump()
+        assert second_store.reconcile(second.reconcile_policy).outcome is None
+        for wrong_client in (second, reader):
+            with pytest.raises(FleetTransportError):
+                first_store.reconcile(wrong_client.reconcile_policy)
+
+        plan = service.preview(actor, initial.id, targets)
+        assert {item.effective.status for item in plan.targets} == {"ready"}
+        approval = service.approve(actor, plan.digest, "initial")
+        assert approval_outcomes(approval) == dict.fromkeys(targets, "pending")
+        denied = first_store.reconcile(first.reconcile_policy, approval.id, "0" * 64)
+        assert denied.outcome.status == "rejected"
+        assert first_store.state().applied_revision is None
+        assert approval_outcomes(approval) == dict.fromkeys(targets, "pending")
+
+        status, output = sync_cli("--approval-id", approval.id, "--digest", plan.digest)
+        assert status == 0
+        assert json.loads(output.out)["outcome"]["status"] == "applied"
+        assert first_store.state().applied_revision == initial.id
+        assert target_view(first_target).applied_revision == initial.id
+        assert approval_outcomes(approval) == {first_target: "applied", second_target: "pending"}
+        assert second_store.state().applied_revision is None
+        late = second_store.reconcile(second.reconcile_policy, approval.id, plan.digest)
+        assert late.outcome.status == "applied"
+        assert approval_outcomes(approval) == dict.fromkeys(targets, "applied")
+
+        following = service.commit(actor, policy, parent=initial.id)
+        plan = service.preview(actor, following.id, targets)
+        approval = service.approve(actor, plan.digest, "next")
+        captured = []
+
+        def lose_ack(request):
+            if request.receipt is not None:
+                captured.append(request)
+                if receipt_delivered:
+                    first.reconcile_policy(request)
+                raise FleetTransportError("simulated lost receipt exchange")
+            return first.reconcile_policy(request)
+
+        with pytest.raises(FleetTransportError, match="simulated lost"):
+            first_store.reconcile(lose_ack, approval.id, plan.digest)
+        assert first_store.state().applied_revision == following.id
+        assert approval_outcomes(approval)[first_target] == (
+            "applied" if receipt_delivered else "pending"
+        )
+
+        latest = service.commit(actor, policy, parent=following.id)
+        rotated, rotated_key = client("next")
+        rotation = enrollment.issue(
+            first_agent.id,
+            key_fingerprint=rotated_key,
+            capability="policy_target",
+            target=first_target,
+            expected_generation=1,
+        )
+        assert rotated.enroll(rotation.token.get_secret_value()).generation == 2
+        with pytest.raises(FleetTransportError):
+            first_store.reconcile(first.reconcile_policy)
+        recovered = FleetPolicyTargetStore(first_path).reconcile(rotated.reconcile_policy)
+        assert recovered.acknowledged_receipt == captured[0].receipt.claim_id
+        assert recovered.outcome.status == "applied"
+        assert approval_outcomes(approval)[first_target] == "applied"
+        assert first_store.reconcile(rotated.reconcile_policy).outcome is None
+        assert target_view(first_target).applied_revision == following.id
+
+        latest_plan = service.preview(actor, latest.id, targets)
+        latest_approval = service.approve(actor, latest_plan.digest, "latest")
+        result = first_store.reconcile(
+            rotated.reconcile_policy, latest_approval.id, latest_plan.digest
+        )
+        assert result.outcome.status == "applied"
+        assert target_view(first_target).applied_revision == latest.id
+
+        drift_plan = service.preview(actor, latest.id, (first_target,))
+        drift_approval = service.approve(actor, drift_plan.digest, "drift")
+        FleetPolicyTargetStore.configure(
+            first_path,
+            first_config.model_copy(
+                update={"limits": FleetPolicyValues(backup_profile_refs=("daily",))}
+            ),
+        )
+        drift = first_store.reconcile(
+            rotated.reconcile_policy, drift_approval.id, drift_plan.digest
+        )
+        assert drift.outcome.reason == "local_revision_changed"
+        assert drift.outcome.conflict_owner == "local_operator"
+        assert target_view(first_target).conflict_owner == "local_operator"
+        current = target_view(first_target)
+        historical = captured[0]
+        for sequence in (historical.sequence, drift.sequence + 1):
+            replay = rotated.reconcile_policy(historical.model_copy(update={"sequence": sequence}))
+            assert replay.acknowledged_receipt == historical.receipt.claim_id
+            assert target_view(first_target) == current
+
+        head = service.commit(actor, policy, parent=latest.id)
+        head_plan = service.preview(actor, head.id, (first_target,))
+        current_approval = service.approve(actor, head_plan.digest, "current-head")
+        FleetPolicyTargetStore.configure(first_path, first_config)
+        assert first_store.reconcile(rotated.reconcile_policy).outcome is None
+        assert target_view(first_target).conflict_owner == "local_operator"
+        assert approval_outcomes(current_approval) == {first_target: "pending"}
+
+        assert enrollment.revoke(first_agent.id, expected_generation=2) == 3
+        with pytest.raises(FleetTransportError):
+            first_store.reconcile(rotated.reconcile_policy)
+        assert first_store.state().applied_revision == latest.id

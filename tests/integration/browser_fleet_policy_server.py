@@ -57,6 +57,16 @@ def main():
                 raise HTTPException(403)
             return policy.adopt_local(target, approval, digest)
 
+        @app.post("/__browser_fixture__/fleet/local-change")
+        def local_change(request: Request):
+            if request.headers.get("x-browser-fixture-token") != TOKEN:
+                raise HTTPException(403)
+            changed = FleetPolicyTargetStore.configure(
+                root / "target.db",
+                FleetPolicyTargetConfig(target=online, limits=FleetPolicyValues()),
+            )
+            return policy.report_local(changed)
+
         uvicorn.run(app, host="127.0.0.1", port=19081, access_log=False, log_level="warning")
 
 

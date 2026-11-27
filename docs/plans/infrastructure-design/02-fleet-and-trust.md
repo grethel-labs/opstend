@@ -317,9 +317,8 @@ der Koordinator. Beide Datenbanken müssen getrennte private Dateien auf
 demselben Dateisystem sein. Die Übernahme prüft den aktuellen Kopf und
 den freigegebenen Plan. Sie liest Sicherheitsgrenzen und angewandte
 Revision aus der Datenbank des Ziels. Erst nach gemeinsamem Commit sind
-Richtlinienstand und Ergebnis sichtbar. Die Metadaten ändern keine
-PVE-Konfiguration, Zeitpläne oder laufenden Aufgaben. Verteilung an
-getrennte Rechner und Wiederverbindung folgen in FL02.3 und FL03.
+Richtlinienstand und Ergebnis sichtbar. Die Übernahme schreibt
+ausschließlich Richtlinienmetadaten.
 
 `target-policy.json` enthält `target` und `limits`. `targets.json` enthält
 die ausgewählten Objekte mit `kind`, `id` und `generation`. Beide Dateien
@@ -334,6 +333,47 @@ opstend fleet policy-target-adopt --db "$db" --target-db "$target_db" \
   --approval "$approval" --digest "$digest"
 opstend fleet policy-status --db "$db" --approval-id "$approval"
 ```
+
+### Zielstand melden und Richtlinien nach Wiederverbindung übernehmen (FL02.3)
+
+Für ein entferntes Ziel registriert der Koordinator einen eigenen Agenten
+und bindet die Einladung mit `policy_target` an genau eine Zielgeneration.
+`target.json` enthält dafür `kind`, `id` und `generation`. Ein Host-Ziel
+gehört zum registrierten Host des Agenten. Für eine PVE-Instanz oder einen
+Gast braucht dieser Host einen bestätigten API-Pfad zur Instanz. Die
+Einladung, TLS-Dateien und private Zieldatenbank werden wie oben getrennt
+bereitgestellt. Auf dem Koordinator läuft derselbe private mTLS-Dienst.
+Die Zielbindung bleibt beim Schlüsselwiderruf und bei der Rotation beim
+ursprünglich eingeschriebenen Agenten.
+
+```sh
+opstend fleet issue-invite --db "$db" --agent-id "$agent" --capability policy_target \
+  --target target.json --key-fingerprint "$client_spki" --invite-out target.invite
+
+# Auf dem Ziel nach policy-target-configure und enroll.
+opstend fleet policy-target-sync --target-db "$target_db" \
+  --endpoint https://fleet.lab.example:8443 --cert-file /etc/fleet/client.pem \
+  --key-file /etc/fleet/client.key --server-ca-file /etc/fleet/server-ca.pem
+```
+
+Der Aufruf meldet den angewandten Stand und die aktuelle lokale
+Sicherheitsrevision. Für die Übernahme denselben Befehl mit
+`--approval-id "$approval" --digest "$digest"` ausführen. Der Koordinator
+prüft beim Beanspruchen den aktuellen Kopf, die Zielgeneration, den
+Geltungsbereich des Freigebenden und den Ablauf. Das Ziel prüft seine
+lokalen Grenzen und die kurze Gültigkeit der Antwort unmittelbar vor der
+Übernahme. Es speichert den neuen Stand mit dem lokalen Readback-Beleg.
+Bei unterbrochener Bestätigung übermittelt der nächste Aufruf denselben
+Beleg erneut. Die Ergebnisansicht zeigt bestätigte Übernahmen je Ziel an.
+
+Ein getrenntes Ziel bleibt ausstehend, während andere Ziele ihre Revision
+übernehmen können. Nach der Wiederverbindung kann es eine noch gültige
+Freigabe übernehmen, wenn der gemeldete Stand weiterhin zur Vorschau
+passt. Ein geänderter lokaler Sicherheitsstand erscheint als Konflikt in
+der Verantwortung des lokalen Betreibers. Bericht, Vorschau und Freigabe
+erneuern, wenn sich der Stand geändert hat oder die Freigabe abgelaufen
+ist. Eine neue Revision oder ein Widerruf wirkt bei der nächsten Prüfung
+für eine Übernahme. Bereits bestätigte Ergebnisse bleiben erhalten.
 
 ## Sequenz für einen Gast-Neustart
 
