@@ -9,8 +9,17 @@ import time
 from hashlib import sha256
 from pathlib import Path
 from threading import BoundedSemaphore, Event, Thread
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
+from pydantic import TypeAdapter, ValidationError
+
+from steward.core.fleet_adoption_models import (
+    AuditPrivilege,
+    Calendar,
+    PveAdoptionEvidence,
+    PveBackupSchedule,
+    ScheduleState,
+)
 from steward.core.pve_inventory import (
     _MAX_REQUESTS,
     _MAX_RESPONSE,
@@ -23,6 +32,7 @@ from steward.core.pve_inventory import (
 from steward.core.pve_inventory_models import MAX_RESOURCES, InventorySnapshot
 from steward.core.pve_native import (
     API_PORT,
+    PVE_VERSION,
     _api_context,
     _load_token,
     _remaining,
@@ -34,8 +44,12 @@ if TYPE_CHECKING:
     from steward.core.fleet_enrollment import PveConnectorRoute
 
 _STATUS = "/api2/json/cluster/status"
+_BACKUP = "/api2/json/cluster/backup"
 _NATIVE_ID = re.compile(r"[a-z2-7]{20}")
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}")
+_BACKUP_JOB_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+_VMID = re.compile(r"[1-9][0-9]{2,8}")
+_CALENDAR = TypeAdapter(Calendar)
 _Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 # libc resolution can outlive the request. A bounded number of daemon threads
 # may finish an abandoned lookup, but can never connect or access credentials.
@@ -182,11 +196,96 @@ class _RemoteCollector(_Collector):
             self._check_address(min(self.deadline, time.monotonic() + _REQUEST_TIMEOUT))
 
 
-def collect_pve_inventory(
-    route: PveConnectorRoute, *, ca_file: Path, token_ref: str
-) -> InventorySnapshot:
-    """Read scoped evidence only after verifying the approved transport and native instance."""
-    deadline = time.monotonic() + _TIMEOUT + _REQUEST_TIMEOUT
+class _AdoptionCollector(_RemoteCollector):
+    request_limit = _RemoteCollector.request_limit + 1
+
+    def _check_identity(self, acl: _Acl, *, final: bool = False) -> None:
+        super()._check_identity(acl, final=final)
+        privileges = {name for permissions in acl.values() for name in permissions}
+        if final:
+            self.audit_privileges &= privileges
+        else:
+            self.audit_privileges = privileges
+            # This endpoint is gated by root Sys.Audit, not per-guest ACLs.
+            # Hold its response until the final guest roster and ACL check.
+            self.backup_rows, self.backup_evidence = self._get(_BACKUP, "cluster_resources")
+
+    def collect_adoption(self) -> tuple[InventorySnapshot, PveAdoptionEvidence]:
+        snapshot = self.collect()
+        state = cast(ScheduleState, self.backup_evidence.state)
+        schedules = ()
+        if state == "observed":
+            if not isinstance(self.backup_rows, list) or len(self.backup_rows) > MAX_RESOURCES:
+                state = "invalid"
+            else:
+                schedules = _project_backup_jobs(self.backup_rows, self.route, snapshot)
+        _remaining(self.deadline)
+        return snapshot, PveAdoptionEvidence(
+            observed_at=snapshot.observed_at,
+            node=self.route.node,
+            pve_version=PVE_VERSION,
+            audit_privileges=cast(tuple[AuditPrivilege, ...], tuple(sorted(self.audit_privileges))),
+            schedule_state=state,
+            schedules=schedules,
+        )
+
+
+def _explicit_selection(row: dict, visible_vmids: set[int], node: str) -> tuple[int, ...]:
+    if {"pool", "exclude"} & row.keys() or row.get("node", node) != node:
+        return ()
+    all_guests = row.get("all", 0)
+    if type(all_guests) is not int or all_guests != 0:
+        return ()
+    raw = row.get("vmid")
+    if not isinstance(raw, str) or len(raw) > 10 * MAX_RESOURCES:
+        return ()
+    parts = raw.split(",")
+    if len(parts) > MAX_RESOURCES or any(_VMID.fullmatch(part) is None for part in parts):
+        return ()
+    vmids = {int(part) for part in parts}
+    if len(vmids) != len(parts) or not vmids <= visible_vmids:
+        return ()
+    return tuple(sorted(vmids))
+
+
+def _project_backup_jobs(
+    rows: list, route: PveConnectorRoute, snapshot: InventorySnapshot
+) -> tuple[PveBackupSchedule, ...]:
+    visible_vmids = {guest.vmid for guest in snapshot.guests if guest.node == route.node}
+    jobs: dict[str, PveBackupSchedule] = {}
+    duplicates: set[str] = set()
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        job_id = row.get("id")
+        if not isinstance(job_id, str) or _BACKUP_JOB_ID.fullmatch(job_id) is None:
+            continue
+        if job_id in seen:
+            duplicates.add(job_id)
+            continue
+        seen.add(job_id)
+        vmids = _explicit_selection(row, visible_vmids, route.node)
+        enabled = row.get("enabled", 1)
+        if not vmids or type(enabled) not in (bool, int) or enabled not in (0, 1):
+            continue
+        try:
+            calendar = _CALENDAR.validate_python(row.get("schedule"), strict=True)
+        except ValidationError:
+            calendar = None
+        ref = sha256(f"pve-backup-job:v1:{route.instance_binding}:{job_id}".encode("ascii"))
+        jobs[job_id] = PveBackupSchedule(
+            job_ref=ref.hexdigest(), schedule=calendar, enabled=bool(enabled), vmids=vmids
+        )
+    return tuple(
+        sorted(
+            (job for job_id, job in jobs.items() if job_id not in duplicates),
+            key=lambda job: job.job_ref,
+        )
+    )
+
+
+def _connector_token(ca_file: Path, token_ref: str) -> str:
     prefix, separator, token_path = token_ref.partition(":")
     token_file = Path(token_path)
     if (
@@ -196,12 +295,38 @@ def collect_pve_inventory(
         or not ca_file.is_absolute()
     ):
         raise PveConnectorError("Use absolute paths for the PVE CA and private token file.")
+    return _load_token(token_file)
+
+
+def collect_pve_inventory(
+    route: PveConnectorRoute, *, ca_file: Path, token_ref: str
+) -> InventorySnapshot:
+    """Read scoped evidence only after verifying the approved transport and native instance."""
+    deadline = time.monotonic() + _TIMEOUT + _REQUEST_TIMEOUT
     try:
-        token = _load_token(token_file)
+        token = _connector_token(ca_file, token_ref)
         return _RemoteCollector(route, ca_file, token, deadline).collect()
     except PveConnectorError:
         raise
     except (OSError, ValueError, _InventoryFailure):
         raise PveConnectorError(
             "Could not collect inventory from the approved PVE route."
+        ) from None
+
+
+def collect_pve_adoption(
+    route: PveConnectorRoute, *, ca_file: Path, token_ref: str
+) -> tuple[InventorySnapshot, PveAdoptionEvidence]:
+    """Read token-scoped native schedules together with bound standalone inventory."""
+    if route.kind != "standalone":
+        raise PveConnectorError("PVE adoption requires an approved standalone route.")
+    deadline = time.monotonic() + _TIMEOUT + _REQUEST_TIMEOUT
+    try:
+        token = _connector_token(ca_file, token_ref)
+        return _AdoptionCollector(route, ca_file, token, deadline).collect_adoption()
+    except PveConnectorError:
+        raise
+    except (OSError, ValueError, _InventoryFailure):
+        raise PveConnectorError(
+            "Could not collect adoption evidence from the approved PVE route."
         ) from None

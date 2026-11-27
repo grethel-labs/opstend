@@ -221,6 +221,68 @@ opstend fleet revoke --db "$db" --agent-id "$agent" --generation "$generation"
 opstend fleet guest-history --db "$db" --instance-id "$instance" --vmid 101
 ```
 
+### Einen bestehenden Standalone-Host lesend übernehmen (FL01.3)
+
+Registriere die Instanz mit `--kind standalone`, bestätige die Route und
+enrolle den Connector mit `pve_inventory` wie oben beschrieben. Für die
+Übernahme braucht der Koordinator die registrierte Instanz, die bestätigte
+Route, den Connector mit seiner aktuellen Grant-Generation und die
+unabhängig verifizierte native ID.
+
+Auf einem Standalone-Host mit nativer OpsTend-Installation kann root optional
+das lokale Profil exportieren. Der Export prüft die registrierte Installation
+und ihre Units. Er enthält Profil, Knoten, installierte Version, Rollen,
+Instanzbindung und Erhebungszeitpunkt. Stelle die Datei dem Koordinator über
+einen geschützten Kanal als private reguläre Datei bereit.
+
+```sh
+(umask 077; opstend fleet export-pve-profile > pve-profile.json)
+# Auf dem Koordinator. Ohne lokalen Export die letzte Option weglassen.
+opstend fleet adopt-pve --db "$db" --instance-id "$instance" --route-id "$route" \
+  --agent-id "$agent" --generation "$generation" --native-id "$native_id" \
+  --local-profile /srv/opstend-fleet/pve-profile.json
+```
+
+Die Erhebung läuft auf dem Connector mit demselben PVE-Lesetoken und
+derselben mTLS-Identität wie das Inventar. Sie zeigt PVE-Version, effektive
+Leserechte und lokale Backup-Zeitpläne, deren explizite VMID-Liste vollständig
+im bestätigten Inventar sichtbar ist. Zeitplanangaben beschränken sich auf
+einfache Kalenderwerte. Bei anderen Kalendern bleibt die Kalenderangabe leer.
+Der Status der Zeitplanquelle und die Token-Abdeckung gehören zur Anzeige.
+Leere oder fehlende Evidenz erlaubt keine Aussage über die Erreichbarkeit
+des Hosts oder die Abwesenheit von Zeitplänen, Gästen oder Backups.
+Lokale Richtlinien, Dienste und Zeitpläne bleiben in lokaler Verantwortung.
+Die lesende Übernahme vergibt keine Schreibrechte.
+
+```sh
+opstend fleet collect-pve-adoption --endpoint https://fleet.lab.example:8443 \
+  --cert-file /etc/fleet/client.pem --key-file /etc/fleet/client.key \
+  --server-ca-file /etc/fleet/server-ca.pem --pve-ca-file /etc/fleet/pve-ca.pem \
+  --pve-token-ref file:/etc/fleet/pve.token
+opstend fleet show-adoption --db "$db" --instance-id "$instance"
+opstend fleet show-adoption --db "$db" --instance-id "$instance" --history
+opstend fleet detach-pve --db "$db" --instance-id "$instance" --revision "$revision"
+```
+
+Die angezeigte Revision schützt das Trennen gegen konkurrierende Änderungen.
+Trennen entzieht der Route ihre Connector-Grants, offenen Einladungen und
+laufenden Erhebungen. Die Historie zeigt bis zu 20 bestätigte Beobachtungen
+mit stabilen Auftrags- und Capture-Referenzen. Capture-Referenzen identifizieren
+den Bezug zum Gast und belegen kein erfolgreiches Backup. Ein Erhebungsversuch
+ersetzt die aktuelle Anzeige. Eine fehlgeschlagene Erhebung oder Evidenz,
+die älter als fünf Minuten ist, lässt die aktuelle Anzeige leer.
+
+Beim Upgrade verwendet der Koordinator dieselbe private Datenbank weiter.
+Ein Neustart erhält die Registrierung und die Historie. Für den
+Wiederanschluss dieselbe bestätigte Route, Instanzbindung und Agent-ID
+verwenden. Während der Trennung kann nur der bisherige Connector eine neue
+Einladung für diese Route erhalten. Die bekannten Routenmerkmale erneut
+unabhängig prüfen und `confirm-route` mit denselben Werten wiederholen.
+Danach `rotate` mit der beim Trennen ausgegebenen Grant-Generation und einem
+frischen Schlüssel ausführen, erneut enrollen und `adopt-pve` mit der neuen
+Grant-Generation wiederholen. Eine frische Erhebung liefert die aktuelle Sicht
+unter denselben Ressourcen- und Referenz-IDs.
+
 ## Sequenz für einen Gast-Neustart
 
 1. Der Operator erhält Inventar und tatsächliche Capability für genau den

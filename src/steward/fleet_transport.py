@@ -20,6 +20,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from pydantic import Field, SecretStr
 
+from .core.fleet_adoption_models import PveAdoptionEvidence
 from .core.fleet_enrollment import FleetEnrollment, FleetGrant
 from .core.fleet_identity import InventoryObservation, PveConnectorRoute
 from .core.pve_inventory_models import (
@@ -140,6 +141,15 @@ class _Inventory(Projection):
 class _Route(Projection):
     generation: Generation
     route: PveConnectorRoute
+
+
+class _AdoptionRoute(_Route):
+    attempt: Generation
+
+
+class _AdoptionInventory(_Inventory):
+    attempt: Generation
+    evidence: PveAdoptionEvidence
 
 
 class _Error(Projection):
@@ -321,6 +331,8 @@ class _FleetServer(TCPServer):
             b"POST /v1/heartbeat HTTP/1.1": (_Empty, self._heartbeat),
             b"POST /v1/connector-route HTTP/1.1": (_Empty, self._route),
             b"POST /v1/inventory HTTP/1.1": (_Inventory, self._publish),
+            b"POST /v1/adoption/begin HTTP/1.1": (_Empty, self._begin_adoption),
+            b"POST /v1/adoption/publish HTTP/1.1": (_AdoptionInventory, self._publish_adoption),
         }
         if ipaddress.ip_address(address).version == 6:
             self.address_family = socket.AF_INET6
@@ -349,6 +361,21 @@ class _FleetServer(TCPServer):
     def _publish(self, fingerprint: str, request: _Inventory) -> InventoryObservation:
         return self.enrollment.publish_inventory(
             fingerprint, generation=request.generation, snapshot=request.snapshot.to_inventory()
+        )
+
+    def _begin_adoption(self, fingerprint: str, request: _Empty) -> _AdoptionRoute:
+        grant, route, attempt = self.enrollment.begin_adoption(fingerprint)
+        return _AdoptionRoute(generation=grant.generation, route=route, attempt=attempt)
+
+    def _publish_adoption(
+        self, fingerprint: str, request: _AdoptionInventory
+    ) -> InventoryObservation:
+        return self.enrollment.publish_adoption(
+            fingerprint,
+            generation=request.generation,
+            attempt=request.attempt,
+            snapshot=request.snapshot.to_inventory(),
+            evidence=request.evidence,
         )
 
 
@@ -478,4 +505,28 @@ class FleetClient:
             raise FleetTransportError("invalid inventory publication") from None
         return self._post(
             b"/v1/inventory", payload.model_dump_json().encode(), InventoryObservation
+        )
+
+    def begin_adoption(self) -> tuple[int, PveConnectorRoute, int]:
+        result = self._post(b"/v1/adoption/begin", b"{}", _AdoptionRoute)
+        return result.generation, result.route, result.attempt
+
+    def publish_adoption(
+        self,
+        generation: int,
+        attempt: int,
+        snapshot: InventorySnapshot,
+        evidence: PveAdoptionEvidence,
+    ) -> InventoryObservation:
+        try:
+            payload = _AdoptionInventory(
+                generation=generation,
+                attempt=attempt,
+                snapshot=_Snapshot.from_inventory(snapshot),
+                evidence=evidence,
+            )
+        except (AttributeError, TypeError, ValueError):
+            raise FleetTransportError("invalid adoption publication") from None
+        return self._post(
+            b"/v1/adoption/publish", payload.model_dump_json().encode(), InventoryObservation
         )

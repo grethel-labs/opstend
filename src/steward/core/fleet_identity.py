@@ -168,6 +168,23 @@ CREATE TABLE IF NOT EXISTS fleet_guest_uids (
     guest_id TEXT NOT NULL REFERENCES fleet_guests(id),
     PRIMARY KEY (instance_id, pve_uid)
 );
+CREATE TABLE IF NOT EXISTS fleet_pve_adoptions (
+    instance_id TEXT PRIMARY KEY REFERENCES fleet_instances(id),
+    route_id TEXT NOT NULL UNIQUE REFERENCES fleet_routes(id),
+    agent_id TEXT NOT NULL REFERENCES fleet_agents(id),
+    revision INTEGER NOT NULL, status TEXT NOT NULL, grant_generation INTEGER NOT NULL,
+    local_profile TEXT,
+    attempt INTEGER NOT NULL DEFAULT 0, attempt_at TEXT,
+    attempt_generation INTEGER, attempt_fingerprint TEXT,
+    head_observation TEXT REFERENCES fleet_observations(id), current_projection TEXT
+);
+CREATE TABLE IF NOT EXISTS fleet_pve_adoption_history (
+    observation_id TEXT PRIMARY KEY REFERENCES fleet_observations(id),
+    instance_id TEXT NOT NULL REFERENCES fleet_pve_adoptions(instance_id),
+    observed_at TEXT NOT NULL, projection TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS fleet_pve_adoption_history_by_instance
+    ON fleet_pve_adoption_history (instance_id, observed_at DESC);
 CREATE TABLE IF NOT EXISTS fleet_pending_guests (
     guest_id TEXT PRIMARY KEY REFERENCES fleet_guests(id),
     observation_id TEXT NOT NULL REFERENCES fleet_observations(id),
