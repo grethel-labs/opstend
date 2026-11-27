@@ -11,6 +11,20 @@ from typing import Literal
 
 from pydantic import AwareDatetime, SecretStr
 
+from .fleet_adoption import (
+    MAX_ADOPTION_AGE_SECONDS,
+    AdoptedLocalProfile,
+    PveAdoptionAttachment,
+    PveAdoptionView,
+    adoption_for_instance,
+    adoption_for_route,
+    attachment,
+    clear_attempt_for_agent,
+    invalidate_inventory_head,
+    record_projection,
+    view_adoption,
+)
+from .fleet_adoption_models import LocalPveProfile, PveAdoptionEvidence
 from .fleet_identity import (
     FleetIdentityConflict,
     FleetIdentityRegistry,
@@ -90,6 +104,12 @@ def _advance(
         (agent_id, generation, fingerprint, capability, route_id),
     )
     db.execute("DELETE FROM fleet_invitations WHERE agent_id = ?", (agent_id,))
+    clear_attempt_for_agent(db, agent_id)
+    db.execute(
+        """UPDATE fleet_pve_adoptions SET grant_generation = ?
+           WHERE agent_id = ? AND status = 'attached'""",
+        (generation, agent_id),
+    )
 
 
 def _authorize(db: sqlite3.Connection, fingerprint: str, capability: FleetCapability) -> FleetGrant:
@@ -102,6 +122,19 @@ def _authorize(db: sqlite3.Connection, fingerprint: str, capability: FleetCapabi
     if row is None:
         raise FleetEnrollmentConflict("client key has no current grant for this capability")
     return FleetGrant(**dict(row))
+
+
+def _require_live_route(db: sqlite3.Connection, route_id: str) -> None:
+    row = adoption_for_route(db, route_id)
+    if row is not None and row["status"] == "detached":
+        raise FleetEnrollmentConflict("standalone route is detached")
+
+
+def _require_rejoin_agent(db: sqlite3.Connection, route_id: str | None, agent_id: str) -> None:
+    if route_id is not None:
+        row = adoption_for_route(db, route_id)
+        if row is not None and row["status"] == "detached" and row["agent_id"] != agent_id:
+            raise FleetEnrollmentConflict("detached route requires the original connector")
 
 
 class FleetEnrollment:
@@ -149,6 +182,7 @@ class FleetEnrollment:
                 is None
             ):
                 raise FleetEnrollmentConflict("connector requires a confirmed route in its site")
+            _require_rejoin_agent(db, route_id, agent_id)
             db.execute("DELETE FROM fleet_invitations WHERE expires_at <= ?", (timestamp,))
             db.execute(
                 """INSERT INTO fleet_invitations
@@ -190,6 +224,7 @@ class FleetEnrollment:
             agent_id = invite["agent_id"]
             agent = _current_agent(db, agent_id, invite["expected_generation"])
             _unused_key(db, fingerprint)
+            _require_rejoin_agent(db, invite["route_id"], agent_id)
             generation = agent["generation"] + 1
             db.execute("INSERT INTO fleet_enrolled_keys VALUES (?)", (fingerprint,))
             _advance(
@@ -209,7 +244,11 @@ class FleetEnrollment:
     def authorize(self, key_fingerprint: str, *, capability: FleetCapability) -> FleetGrant:
         fingerprint = _fingerprint(key_fingerprint)
         with self._registry._connection() as db:
-            return _authorize(db, fingerprint, capability)
+            db.execute("BEGIN")
+            grant = _authorize(db, fingerprint, capability)
+            if grant.route_id is not None:
+                _require_live_route(db, grant.route_id)
+            return grant
 
     def _connector_scope(
         self, db: sqlite3.Connection, fingerprint: str
@@ -218,6 +257,7 @@ class FleetEnrollment:
         route = self._registry._connector_route(db, grant.route_id) if grant.route_id else None
         if route is None:
             raise FleetEnrollmentConflict("connector grant has no confirmed route")
+        _require_live_route(db, route.route_id)
         return grant, route
 
     def connector_route(self, key_fingerprint: str) -> tuple[FleetGrant, PveConnectorRoute]:
@@ -242,4 +282,202 @@ class FleetEnrollment:
                 transport_fingerprint=route.transport_fingerprint,
                 instance_binding=route.instance_binding,
             )
+            invalidate_inventory_head(db, route.route_id, _timestamp(snapshot.observed_at))
+        return _committed_observation(observation)
+
+    def adopt_pve(
+        self,
+        *,
+        instance_id: str,
+        route_id: str,
+        agent_id: str,
+        expected_generation: int,
+        instance_binding: str,
+        local_profile: LocalPveProfile | None = None,
+    ) -> PveAdoptionAttachment:
+        _generation(expected_generation)
+        binding = _digest(instance_binding)
+        with self._registry._write() as db:
+            route = self._registry._connector_route(db, route_id)
+            if (
+                route is None
+                or route.kind != "standalone"
+                or route.instance_id != instance_id
+                or route.instance_binding != binding
+            ):
+                raise FleetEnrollmentConflict("adoption requires the approved standalone route")
+            if local_profile is not None and (
+                local_profile.node != route.node
+                or local_profile.instance_binding != binding
+                or local_profile.observed_at > datetime.now(UTC)
+            ):
+                raise FleetEnrollmentConflict("local profile does not match the approved route")
+            agent = _current_agent(db, agent_id, expected_generation)
+            enrolled = db.execute(
+                """SELECT 1 FROM fleet_agent_grants AS g JOIN fleet_hosts AS h ON h.id = ?
+                   WHERE g.agent_id = ? AND g.route_id = ? AND g.capability = 'pve_inventory'
+                     AND g.fingerprint IS NOT NULL AND h.site_id = ?""",
+                (route.host_id, agent_id, route_id, agent["site_id"]),
+            ).fetchone()
+            if enrolled is None:
+                raise FleetEnrollmentConflict("adoption requires a current grant for its route")
+            profile = (
+                AdoptedLocalProfile.model_validate(
+                    local_profile.model_dump(exclude={"instance_binding"})
+                ).model_dump_json()
+                if local_profile is not None
+                else None
+            )
+            prior = adoption_for_route(db, route_id)
+            if prior is None:
+                db.execute(
+                    """INSERT INTO fleet_pve_adoptions
+                       (instance_id, route_id, agent_id, revision,
+                        status, grant_generation, local_profile)
+                       VALUES (?, ?, ?, 1, 'attached', ?, ?)""",
+                    (instance_id, route_id, agent_id, expected_generation, profile),
+                )
+            else:
+                if (
+                    prior["status"] != "detached"
+                    or prior["agent_id"] != agent_id
+                    or prior["grant_generation"] >= expected_generation
+                ):
+                    raise FleetEnrollmentConflict(
+                        "rejoin requires the original adoption and freshly enrolled connector"
+                    )
+                db.execute(
+                    """UPDATE fleet_pve_adoptions SET status = 'attached',
+                       revision = revision + 1, grant_generation = ?, local_profile = ?
+                       WHERE instance_id = ?""",
+                    (expected_generation, profile, instance_id),
+                )
+            return attachment(adoption_for_instance(db, instance_id))
+
+    def detach_pve(self, instance_id: str, *, expected_revision: int) -> PveAdoptionAttachment:
+        with self._registry._write() as db:
+            row = adoption_for_instance(db, instance_id)
+            if (
+                type(expected_revision) is not int
+                or row["revision"] != expected_revision
+                or row["status"] != "attached"
+            ):
+                raise FleetEnrollmentConflict("adoption attachment revision mismatch")
+            grants = db.execute(
+                "SELECT agent_id, generation FROM fleet_agent_grants WHERE route_id = ?",
+                (row["route_id"],),
+            ).fetchall()
+            for grant in grants:
+                _generation(grant["generation"])
+                _advance(db, grant["agent_id"], grant["generation"] + 1)
+            db.execute("DELETE FROM fleet_invitations WHERE route_id = ?", (row["route_id"],))
+            clear_attempt_for_agent(db, row["agent_id"])
+            db.execute(
+                """UPDATE fleet_pve_adoptions SET status = 'detached',
+                   revision = revision + 1, local_profile = NULL,
+                   grant_generation = (
+                       SELECT generation FROM fleet_agent_grants WHERE agent_id = ?
+                   ) WHERE instance_id = ?""",
+                (row["agent_id"], instance_id),
+            )
+            return attachment(adoption_for_instance(db, instance_id))
+
+    def show_adoption(
+        self, instance_id: str, *, history: bool = False, now: datetime | None = None
+    ) -> PveAdoptionView:
+        with self._registry._connection() as db:
+            db.execute("BEGIN")
+            return view_adoption(
+                db,
+                adoption_for_instance(db, instance_id),
+                history=history,
+                now=now if now is not None else datetime.now(UTC),
+            )
+
+    def _adoption_scope(
+        self, db: sqlite3.Connection, fingerprint: str
+    ) -> tuple[FleetGrant, PveConnectorRoute, sqlite3.Row]:
+        grant, route = self._connector_scope(db, fingerprint)
+        row = adoption_for_route(db, route.route_id)
+        if row is None or row["agent_id"] != grant.agent_id:
+            raise FleetEnrollmentConflict("connector grant does not match an active adoption")
+        return grant, route, row
+
+    def begin_adoption(
+        self, key_fingerprint: str, *, now: datetime | None = None
+    ) -> tuple[FleetGrant, PveConnectorRoute, int]:
+        fingerprint = _fingerprint(key_fingerprint)
+        with self._registry._write() as db:
+            grant, route, row = self._adoption_scope(db, fingerprint)
+            _generation(row["attempt"])
+            attempt = row["attempt"] + 1
+            db.execute(
+                """UPDATE fleet_pve_adoptions SET attempt = ?, attempt_at = ?,
+                   attempt_generation = ?, attempt_fingerprint = ?,
+                   head_observation = NULL, current_projection = NULL WHERE route_id = ?""",
+                (
+                    attempt,
+                    _timestamp(now if now is not None else datetime.now(UTC)),
+                    grant.generation,
+                    fingerprint,
+                    route.route_id,
+                ),
+            )
+        return grant, route, attempt
+
+    def publish_adoption(
+        self,
+        key_fingerprint: str,
+        *,
+        generation: int,
+        attempt: int,
+        snapshot: InventorySnapshot,
+        evidence: PveAdoptionEvidence,
+        now: datetime | None = None,
+    ) -> InventoryObservation:
+        fingerprint = _fingerprint(key_fingerprint)
+        _generation(generation)
+        if type(attempt) is not int or attempt < 1:
+            raise FleetEnrollmentConflict("invalid adoption attempt")
+        with self._registry._write() as db:
+            grant, route, row = self._adoption_scope(db, fingerprint)
+            if (
+                grant.generation != generation
+                or row["attempt_generation"] != generation
+                or row["attempt_fingerprint"] != fingerprint
+                or row["attempt"] != attempt
+                or row["attempt_at"] is None
+                or row["head_observation"] is not None
+            ):
+                raise FleetEnrollmentConflict("adoption requires a fresh current attempt")
+            received = now if now is not None else datetime.now(UTC)
+            received_at = _timestamp(received)
+            observed_at = _timestamp(snapshot.observed_at)
+            if (
+                not row["attempt_at"] <= observed_at <= received_at
+                or received - datetime.fromisoformat(row["attempt_at"])
+                > timedelta(seconds=MAX_ADOPTION_AGE_SECONDS)
+                or evidence.observed_at != snapshot.observed_at
+                or evidence.node != route.node
+                or snapshot.evidence.source != "cluster_resources"
+                or snapshot.evidence.state not in ("observed", "absent")
+            ):
+                raise FleetEnrollmentConflict("adoption requires fresh matching evidence")
+            newer = db.execute(
+                """SELECT 1 FROM fleet_observations WHERE route_id = ? AND observed_at >= ?
+                   LIMIT 1""",
+                (route.route_id, observed_at),
+            ).fetchone()
+            if newer is not None:
+                raise FleetEnrollmentConflict("adoption publication requires a new observation")
+            observation = self._registry._ingest_snapshot(
+                db,
+                snapshot,
+                route_id=route.route_id,
+                transport_fingerprint=route.transport_fingerprint,
+                instance_binding=route.instance_binding,
+                received_at=received,
+            )
+            if observation is not None:
+                record_projection(db, observation, snapshot, evidence)
         return _committed_observation(observation)

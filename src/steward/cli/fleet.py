@@ -11,9 +11,12 @@ import stat
 import sys
 from pathlib import Path
 
-from ..core.fleet_connector import collect_pve_inventory, pve_instance_binding
+from ..core import pve_native
+from ..core.fleet_adoption_models import LocalPveProfile
+from ..core.fleet_connector import collect_pve_adoption, collect_pve_inventory, pve_instance_binding
 from ..core.fleet_enrollment import FleetEnrollment
 from ..core.fleet_identity import FleetIdentityRegistry
+from ..core.fleet_native_profile import export_pve_profile
 from ..fleet_transport import FleetClient, certificate_fingerprint, create_server
 
 _CAPABILITIES = ("heartbeat", "pve_inventory")
@@ -46,6 +49,15 @@ def _read_invitation(path: Path) -> str:
     if not _INVITE_PATTERN.fullmatch(token):
         raise ValueError("invalid invitation file")
     return token.strip(b"\n").decode("ascii")
+
+
+def _read_local_profile(path: Path) -> LocalPveProfile:
+    try:
+        data = pve_native._read_file(path, 4096, private=True)
+        json.loads(data.decode("utf-8"), object_pairs_hook=pve_native._unique_object)
+        return LocalPveProfile.model_validate_json(data)
+    except (OSError, ValueError, RecursionError):
+        raise ValueError("invalid private PVE profile") from None
 
 
 def _issue(enrollment: FleetEnrollment, args: argparse.Namespace) -> None:
@@ -109,6 +121,21 @@ def _operator(args: argparse.Namespace) -> None:
                 )
             )
             return
+        case "adopt-pve":
+            result = enrollment.adopt_pve(
+                instance_id=args.instance_id,
+                route_id=args.route_id,
+                agent_id=args.agent_id,
+                expected_generation=args.generation,
+                instance_binding=pve_instance_binding(args.native_id),
+                local_profile=_read_local_profile(args.local_profile)
+                if args.local_profile
+                else None,
+            )
+        case "detach-pve":
+            result = enrollment.detach_pve(args.instance_id, expected_revision=args.revision)
+        case "show-adoption":
+            result = enrollment.show_adoption(args.instance_id, history=args.history)
         case "guest-history":
             print(
                 json.dumps(
@@ -151,6 +178,12 @@ def _agent(args: argparse.Namespace) -> None:
                 route, ca_file=args.pve_ca_file, token_ref=args.pve_token_ref
             )
             result = client.publish_inventory(generation, snapshot)
+        case "collect-pve-adoption":
+            generation, route, attempt = client.begin_adoption()
+            snapshot, evidence = collect_pve_adoption(
+                route, ca_file=args.pve_ca_file, token_ref=args.pve_token_ref
+            )
+            result = client.publish_adoption(generation, attempt, snapshot, evidence)
     print(result.model_dump_json())
 
 
@@ -158,7 +191,9 @@ def _run(args: argparse.Namespace) -> int:
     try:
         if args.fleet_command == "key-fingerprint":
             print(certificate_fingerprint(args.cert_file))
-        elif args.fleet_command in {"enroll", "heartbeat", "collect-pve"}:
+        elif args.fleet_command == "export-pve-profile":
+            print(export_pve_profile().model_dump_json())
+        elif args.fleet_command in {"enroll", "heartbeat", "collect-pve", "collect-pve-adoption"}:
             _agent(args)
         else:
             _operator(args)
@@ -222,6 +257,18 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     revoke = operator("revoke", "revoke a grant at a specified generation")
     revoke.add_argument("--agent-id", required=True)
     revoke.add_argument("--generation", type=int, required=True)
+    adopt = operator("adopt-pve", "attach a confirmed standalone PVE route read-only")
+    for option in ("instance-id", "route-id", "agent-id", "native-id"):
+        adopt.add_argument("--" + option, required=True)
+    adopt.add_argument("--generation", type=int, required=True)
+    adopt.add_argument("--local-profile", type=Path)
+    detach = operator("detach-pve", "detach a PVE instance and fence its connector routes")
+    detach.add_argument("--instance-id", required=True)
+    detach.add_argument("--revision", type=int, required=True)
+    show = operator("show-adoption", "read scoped PVE adoption evidence")
+    show.add_argument("--instance-id", required=True)
+    show.add_argument("--history", action="store_true")
+    commands.add_parser("export-pve-profile", help="export the verified local native PVE profile")
     history = operator("guest-history", "read sanitized guest generations")
     history.add_argument("--instance-id", required=True)
     history.add_argument("--vmid", type=int, required=True)
@@ -236,9 +283,13 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     enroll.add_argument("--invite-file", type=Path, required=True)
     heartbeat = commands.add_parser("heartbeat", help="verify the current heartbeat grant")
     collect = commands.add_parser("collect-pve", help="collect and publish a scoped PVE snapshot")
-    collect.add_argument("--pve-ca-file", type=Path, required=True)
-    collect.add_argument("--pve-token-ref", required=True)
-    for command in (enroll, heartbeat, collect):
+    adoption_collect = commands.add_parser(
+        "collect-pve-adoption", help="collect and publish scoped standalone PVE evidence"
+    )
+    for command in (collect, adoption_collect):
+        command.add_argument("--pve-ca-file", type=Path, required=True)
+        command.add_argument("--pve-token-ref", required=True)
+    for command in (enroll, heartbeat, collect, adoption_collect):
         command.add_argument("--endpoint", required=True)
         command.add_argument("--server-ca-file", type=Path, required=True)
         tls(command)
