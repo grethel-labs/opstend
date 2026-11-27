@@ -17,10 +17,24 @@ _RRD_BUCKET_SECONDS = 60
 _RRD_HEARTBEAT_SECONDS = 120
 
 EvidenceState = Literal[
-    "observed", "absent", "restricted", "missing", "unavailable", "invalid", "budget"
+    "observed",
+    "absent",
+    "restricted",
+    "missing",
+    "unavailable",
+    "invalid",
+    "budget",
+    "unsupported",
+    "rate_limited",
 ]
 EvidenceSource = Literal[
-    "cluster_resources", "node_rrd", "guest_config", "guest_rrd", "guest_tasks", "permissions"
+    "cluster_resources",
+    "node_rrd",
+    "guest_config",
+    "guest_rrd",
+    "guest_tasks",
+    "permissions",
+    "api_version",
 ]
 GuestKind = Literal["qemu", "lxc"]
 ResourceName = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")]

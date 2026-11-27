@@ -4,8 +4,11 @@ import ipaddress
 import json
 import ssl
 import stat
+import subprocess
+import sys
 import threading
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from cryptography import x509
@@ -14,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
 from steward import pve_native_runtime as runtime
+from steward.core import pve_native
 from steward.core.pve_inventory_models import (
     Evidence,
     Guest,
@@ -26,6 +30,7 @@ from test_pve_inventory import INDEX, NODE, READ_TOKEN, guest, payload
 from test_pve_inventory import local_target as local_target
 from test_pve_native import API_NAME, API_TOKEN, PERMISSIONS_PATH, VERSION_PATH
 from test_pve_native import pve_api as pve_api
+from test_pve_native import pve_tls as pve_tls
 from test_pve_native import token_file as token_file
 
 ADMIN_TOKEN = "synthetic-test-token-used-only-in-tests"
@@ -453,6 +458,105 @@ def test_inventory_refreshes_from_scoped_local_https(native_ui, local_target, sn
     runtime._refresh_inventory(target)
     assert b"lacks access" in request("GET", "/inventory", authorization=correct)[2]
     assert runtime._inventory()["guests"] == []
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "response", "state"),
+    [
+        (VERSION_PATH, payload({"version": "9.3.2", "release": "9.3"}), "unsupported"),
+        (INDEX, (429, b"raw-throttle-canary"), "rate_limited"),
+    ],
+)
+def test_unavailable_inventory_replaces_public_rows(
+    local_target, snapshot, endpoint, response, state
+):
+    target, responses, _ = local_target
+    runtime._refresh_inventory(target)
+    assert runtime._inventory(190)["guest"]["vmid"] == 190
+
+    responses[endpoint] = response
+    runtime._refresh_inventory(target)
+    overview = runtime._inventory()
+    assert overview["status"] == "unavailable"
+    assert overview["evidence"]["state"] == state
+    assert not any(overview[field] for field in ("nodes", "guests", "pools", "datastores"))
+    assert runtime._inventory(190)["guest"] is None
+    status_path, _, _ = snapshot
+    persisted = status_path.with_name("inventory.json").read_text()
+    assert "raw-throttle-canary" not in persisted
+    assert "guest-190" not in persisted
+
+
+def test_interrupted_https_refresh_is_cleared_until_fresh_process_refills(local_target, snapshot):
+    target, responses, calls = local_target
+    status_path, boot, clock = snapshot
+    inventory_path = status_path.with_name("inventory.json")
+    runtime._refresh_inventory(target)
+    assert runtime._inventory(190)["guest"]["vmid"] == 190
+
+    entered = threading.Event()
+    release = threading.Event()
+    roster = responses[INDEX]
+
+    def pause_roster():
+        entered.set()
+        release.wait(timeout=5)
+        return roster
+
+    child = """\
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from steward import pve_native_runtime as runtime
+from steward.core import pve_native
+
+source, state, boot, clock, port, api_name, ca, inventory_token, health_token = sys.argv[1:]
+runtime._STATE = Path(state)
+runtime._BOOT_ID = Path(boot)
+runtime._boottime = lambda: float(clock)
+pve_native.API_PORT = int(port)
+runtime._refresh_inventory(
+    runtime.RegisteredLocalTarget(api_name, Path(ca), Path(inventory_token), Path(health_token))
+)
+"""
+    command = [
+        sys.executable,
+        "-c",
+        child,
+        str(Path(runtime.__file__).resolve().parents[1]),
+        str(status_path.parent),
+        str(boot),
+        str(clock[0]),
+        str(pve_native.API_PORT),
+        target.api_name,
+        str(target.ca_file),
+        str(target.inventory_token_file),
+        str(target.health_token_file),
+    ]
+    responses[INDEX] = pause_roster
+    with subprocess.Popen(command) as process:  # noqa: S603
+        try:
+            assert entered.wait(timeout=5)
+            assert process.poll() is None
+            assert calls[-1][1] == INDEX
+            assert runtime._inventory()["status"] == "unavailable"
+            assert runtime._inventory(190)["guest"] is None
+            assert json.loads(inventory_path.read_text())["inventory"] is None
+        finally:
+            if process.poll() is None:
+                process.kill()
+            release.set()
+        assert process.wait(timeout=5) < 0
+    assert runtime._inventory()["status"] == "unavailable"
+
+    responses[INDEX] = payload([guest("lxc", 191)])
+    calls.clear()
+    subprocess.run(command, check=True, timeout=10)  # noqa: S603
+    assert runtime._inventory()["status"] == "observed"
+    assert runtime._inventory(190)["guest"] is None
+    assert runtime._inventory(191)["guest"]["vmid"] == 191
+    assert [path for _, path, _ in calls].count(VERSION_PATH) == 2
 
 
 @pytest.mark.parametrize("problem", ["symlink", "directory", "mode", "duplicate", "fields", "size"])
