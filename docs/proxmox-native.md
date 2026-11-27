@@ -515,3 +515,7 @@ potential partial clones keep the destination reserved for operator
 investigation. The executor issues one clone POST per confirmed job and has
 no guest cleanup action. The existing executor-directory `kill-switch`
 also stops provisioning dispatches.
+
+The [PX03 qualification procedure](../tests/integration/gates/m9-px03.md)
+checks lifecycle and full clones on the signed M9 test installation and
+reproduces response loss with an isolated TLS fixture.
