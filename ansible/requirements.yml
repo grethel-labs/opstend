@@ -1,7 +1,0 @@
----
-# Pinned controller collections. Updated deliberately, never floating.
-collections:
-  - name: ansible.posix
-    version: 2.1.0
-  - name: community.crypto
-    version: 3.0.5

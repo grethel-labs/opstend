@@ -1,0 +1,27 @@
+{
+  "name": "opstend-web",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "icons": "node scripts/icons.mjs",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@grethel-labs/excaliplant": "1.15.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@types/node": "24.10.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.8"
+  }
+}

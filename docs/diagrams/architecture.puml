@@ -1,0 +1,30 @@
+@startuml
+title OpsTend node and cluster
+actor "Operator\n(browser / PWA)" as op
+package "Every OpsTend node" as node {
+  component "opstend serve\n(user opstend)" as serve {
+    rectangle "Web app + API" as api
+    rectangle "Jobs: preview → approval\n→ run → readback" as jobs
+    rectangle "Self-management\n(reconciler, governor)" as rec
+    rectangle "Zorec" as zorec
+    database "Replicated state\n(Raft log + SQLite)" as state
+  }
+  component "opstend agent\n(root, Unix socket)" as agent
+}
+node "Other OpsTend nodes\n(voters and learners)" as peers
+node "Proxmox VE" as pve
+node "Linux servers\n(any distro / arch)" as linux
+node "UniFi console" as unifi
+cloud "Sigstore-signed\nGitHub releases" as rel
+op --> api : HTTPS, session + CSRF
+api --> jobs
+rec --> jobs : proposals within policy
+zorec ..> jobs : suggestions only
+jobs --> state
+state <--> peers : Raft over mutual TLS
+jobs --> agent : allowlisted argv
+jobs --> pve : API token, pinned cert
+jobs --> linux : SSH, pinned host key
+jobs --> unifi : local account, pinned cert
+serve ..> rel : self-update, verified
+@enduml

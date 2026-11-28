@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+# OpsTend host agent: privileged commands over a local Unix socket only
+name="opstend-agent"
+description="OpsTend host agent"
+command="/opt/opstend/current/bin/opstend"
+command_args="agent"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+supervisor="supervise-daemon"
+respawn_delay=5
+
+depend() {
+  need localmount
+}
+
+start_pre() {
+  checkpath -d -o root:opstend -m 0750 /run/opstend
+}

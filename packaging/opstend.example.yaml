@@ -1,0 +1,47 @@
+# /etc/opstend/opstend.yaml – secrets never go here; point to files in /etc/opstend/secrets/
+node:
+  name: nuc-a
+  address: 10.20.10.11          # address other nodes use to reach this one
+  site: Werkstatt
+  labels: {storage: "yes"}      # gpu, storage, zone=… guide role placement
+  language: de                  # language of texts written by the automation
+
+listen:
+  web: 0.0.0.0:8443
+  cluster: 0.0.0.0:47471        # mutual TLS between OpsTend nodes only
+
+discovery_subnets: [10.20.10.0/24, 10.20.20.0/24]
+
+integrations:
+  proxmox:
+    - name: home
+      url: https://10.20.10.11:8006
+      token_id: opstend@pve!ops
+      token_secret_file: /etc/opstend/secrets/pve-home
+      cluster: home
+      cert_file: /etc/opstend/pve-home.pem     # confirmed during adoption
+      site: Werkstatt
+  unifi:
+    - name: werkstatt
+      url: https://10.20.10.1
+      username: opstend
+      password_file: /etc/opstend/secrets/unifi-werkstatt
+      site: Werkstatt
+  linux:
+    - name: nuc-a
+      address: 127.0.0.1
+      local: true                  # this machine, through the local agent
+    - name: edge-01
+      address: 203.0.113.10
+      ssh_user: opstend
+      ssh_key_file: /etc/opstend/secrets/ssh_ed25519
+      known_hosts: /etc/opstend/known_hosts
+      site: Extern
+
+zorec:
+  provider: none                   # none | anthropic | local
+  # provider: local
+  # url: http://10.20.20.65:11434
+  # model: qwen3:14b
+  # provider: anthropic
+  # api_key_file: /etc/opstend/secrets/anthropic
