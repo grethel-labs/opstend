@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -151,7 +152,9 @@ async def fetch_repo(url: str) -> tuple[dict[str, str], str | None]:
                 "Unterstützt werden bisher https://github.com/<owner>/<repo>-URLs",
             ),
         )
-    owner, repo = m.groups()
+    owner, repo = (quote(part, safe="") for part in m.groups())
+    if owner.startswith(".") or repo.startswith("."):
+        raise HTTPException(422, t("Invalid repository URL", "Ungültige Repository-URL"))
     async with httpx.AsyncClient(timeout=15) as client:
         head = await client.get(f"https://api.github.com/repos/{owner}/{repo}/commits/HEAD")
         if head.status_code != 200:
@@ -926,21 +929,27 @@ def build_app(rt: Runtime) -> FastAPI:
 
     # -- web app -----------------------------------------------------------
 
+    # Serve only files that exist in the built web app, by exact name.
+    static_files = (
+        {str(f.relative_to(STATIC)): f for f in STATIC.rglob("*") if f.is_file()}
+        if STATIC.is_dir()
+        else {}
+    )
+
     @app.get("/{path:path}", include_in_schema=False)
     async def spa(path: str) -> Response:
         if path.startswith("api/"):
             raise HTTPException(404)
-        target = (STATIC / path).resolve()
-        if path and target.is_file() and STATIC.resolve() in target.parents:
+        file = static_files.get(path)
+        if file is not None:
             headers = (
                 {"Cache-Control": "public, max-age=31536000, immutable"}
                 if path.startswith("assets/")
                 else {}
             )
-            return FileResponse(target, headers=headers)
-        index = STATIC / "index.html"
-        if index.exists():
-            return FileResponse(index, headers={"Cache-Control": "no-store"})
+            return FileResponse(file, headers=headers)
+        if "index.html" in static_files:
+            return FileResponse(static_files["index.html"], headers={"Cache-Control": "no-store"})
         return JSONResponse({"detail": "web app not built; run npm run build in web/"}, 404)
 
     return app

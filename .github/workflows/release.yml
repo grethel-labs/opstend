@@ -65,7 +65,7 @@ jobs:
           (cd web && npm version --no-git-tag-version "${VERSION}" >/dev/null)
       - run: npm ci && npm run build
         working-directory: web
-      - run: uv build
+      - run: uv build --wheel && uv build --sdist
       - name: Collect release files
         run: |
           mkdir release

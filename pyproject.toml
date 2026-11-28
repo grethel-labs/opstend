@@ -51,6 +51,7 @@ artifacts = ["src/opstend/api/static/**"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/opstend", "README.md", "LICENSE"]
+artifacts = ["src/opstend/api/static/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

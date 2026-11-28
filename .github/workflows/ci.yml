@@ -92,7 +92,7 @@ jobs:
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - run: npm ci && npm run build
         working-directory: web
-      - run: uv build
+      - run: uv build --wheel
       - name: The wheel contains the web app
         run: python3 -c "import zipfile,glob,sys; z=zipfile.ZipFile(glob.glob('dist/*.whl')[0]); sys.exit(0 if 'opstend/api/static/index.html' in z.namelist() else 1)"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -140,7 +140,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: shellcheck -S warning packaging/install.sh packaging/openrc/*
+      - run: shellcheck -S warning packaging/install.sh
+      - run: shellcheck -S warning -s sh -e SC1008,SC2034 packaging/openrc/*
       - run: systemd-analyze verify --man=no packaging/systemd/*.service || true
 
   ci-ok:

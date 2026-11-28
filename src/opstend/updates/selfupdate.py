@@ -171,11 +171,20 @@ def restart_service() -> None:
         subprocess.run(["rc-service", "opstend", "restart"], check=True)  # noqa: S607
 
 
-def healthy(url: str, timeout: float = 90.0) -> bool:
+def healthy(url: str, timeout: float = 90.0, cert: Path = Path("/etc/opstend/tls.crt")) -> bool:
+    """Wait until the local web app answers, trusting exactly this node's certificate."""
+    verify: Any = True
+    if cert.exists():
+        import ssl
+
+        ctx = ssl.create_default_context(cafile=str(cert))
+        ctx.check_hostname = False
+        ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+        verify = ctx
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            if httpx.get(url, verify=False, timeout=3).status_code == 200:  # noqa: S501 - local
+            if httpx.get(url, verify=verify, timeout=3).status_code == 200:
                 return True
         except httpx.HTTPError:
             pass

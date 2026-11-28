@@ -24,6 +24,7 @@ class Probe:
     timeout_s: float = 5.0
     slow_ms: int = 2000
     expect_status: tuple[int, ...] = (200, 204, 301, 302, 401)
+    verify_tls: bool = True  # set False only for services with self-signed certificates
 
 
 @dataclass
@@ -40,7 +41,7 @@ async def run_probe(
     try:
         if probe.kind == "http":
             own = client is None
-            c = client or httpx.AsyncClient(timeout=probe.timeout_s, verify=False)  # noqa: S501 - health only
+            c = client or httpx.AsyncClient(timeout=probe.timeout_s, verify=probe.verify_tls)
             try:
                 resp = await c.get(probe.target)
             finally:
