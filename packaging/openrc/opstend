@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+# OpsTend web app, API and automation (unprivileged)
+name="opstend"
+description="OpsTend"
+command="/opt/opstend/current/bin/opstend"
+command_args="serve --config /etc/opstend/opstend.yaml --tls-cert /etc/opstend/tls.crt --tls-key /etc/opstend/tls.key"
+command_user="opstend:opstend"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/opstend.log"
+error_log="/var/log/opstend.log"
+supervisor="supervise-daemon"
+respawn_delay=5
+
+depend() {
+  need net
+  after opstend-agent
+}
+
+start_pre() {
+  checkpath -f -o opstend:opstend -m 0640 /var/log/opstend.log
+}

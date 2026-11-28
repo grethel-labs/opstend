@@ -1,75 +1,66 @@
 [project]
-name = "steward"
-version = "0.1.0rc1"
-description = "OpsTend: self-hosted hardening, workload isolation and guarded automation for Linux servers"
+name = "opstend"
+dynamic = ["version"]
+description = "Self-managing operations for Proxmox, Linux and UniFi: inventory, network insight, security scans, coordinated updates and AI-assisted deployment."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
+authors = [{ name = "Grethel Labs" }]
 dependencies = [
-    "cryptography>=46",
+    "cryptography>=44",
     "fastapi>=0.115",
+    "httpx>=0.28",
     "pydantic>=2.9",
     "pyyaml>=6.0.2",
+    "tzdata>=2025.2",
     "uvicorn>=0.32",
 ]
+
+[project.optional-dependencies]
+# Verifies signed releases during self-update. Installed by the release bundle.
+signing = ["sigstore>=3.6"]
+# Zorec with Claude. Local models need no extra package.
+anthropic = ["anthropic>=2.14"]
 
 [project.urls]
 Repository = "https://github.com/grethel-labs/opstend"
 Documentation = "https://github.com/grethel-labs/opstend/tree/main/docs"
 
-[project.optional-dependencies]
-controller = ["ansible-core>=2.20,<2.21"]
-
 [project.scripts]
-opstend = "steward.cli.main:main"
-opstend-host = "steward.hostcli:main"
-opstend-api = "steward.api.server:main"
-opstend-executor = "steward.executor.server:main"
-opstend-controller = "steward.controller:main"
-opstend-collector = "steward.collector:main"
-opstend-notifier = "steward.notifier:main"
-opstend-bot = "steward.bot:main"
-opstend-scan = "steward.scanner:main"
-opstend-scannerd = "steward.scannerd:main"
-opstend-backup = "steward.backup:main"
-opstend-backupd = "steward.backupworker:main"
-
-# Existing host units and operator scripts use these entry points.
-steward = "steward.cli.main:main"
-steward-host = "steward.hostcli:main"
-steward-api = "steward.api.server:main"
-steward-executor = "steward.executor.server:main"
-steward-controller = "steward.controller:main"
-steward-collector = "steward.collector:main"
-steward-notifier = "steward.notifier:main"
-steward-bot = "steward.bot:main"
-steward-scan = "steward.scanner:main"
-steward-scannerd = "steward.scannerd:main"
-steward-backup = "steward.backup:main"
-steward-backupd = "steward.backupworker:main"
+opstend = "opstend.cli:main"
 
 [dependency-groups]
 dev = [
-    "ansible-lint>=25",
-    "httpx2>=2.16.0",
-    "jsonschema>=4.23",
+    "httpx>=0.29.0",
+    "mypy>=1.13",
     "pytest>=8.3",
-    "pytest-xdist>=3.8,<4",
+    "pytest-asyncio>=0.24",
     "ruff>=0.8",
+    "types-PyYAML>=6.0",
 ]
 
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
+[tool.hatch.version]
+path = "src/opstend/__init__.py"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/steward"]
-artifacts = ["src/steward/api/static/**"]
+packages = ["src/opstend"]
+artifacts = ["src/opstend/api/static/**"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/opstend", "README.md", "LICENSE"]
+artifacts = ["src/opstend/api/static/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-q"
+addopts = "-q -m \"not cluster\""
+markers = ["cluster: multi-process cluster test (slow)"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
@@ -77,8 +68,16 @@ target-version = "py312"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "S", "SIM"]
-ignore = ["S101", "S603", "S607"]
+select = ["E", "F", "I", "B", "UP", "S", "SIM", "RUF"]
+ignore = ["RUF012", "RUF001", "B008", "E501", "SIM102", "S603"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S104", "S105", "S106", "S108", "E501"]
+"tests/**" = ["S101", "S105", "S106", "S108", "S311", "S104", "S501", "SIM115"]
+
+[tool.mypy]
+python_version = "3.12"
+packages = ["opstend"]
+mypy_path = "src"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true

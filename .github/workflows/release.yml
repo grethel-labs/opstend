@@ -1,0 +1,124 @@
+name: Release
+
+# Every push to main that contains a `feat`, `fix`, `perf`, `security` or `refactor`
+# commit produces a signed release. Nobody has to tag, sign or upload anything.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  plan:
+    needs: ci
+    runs-on: ubuntu-24.04
+    outputs:
+      release: ${{ steps.next.outputs.release }}
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: next
+        run: |
+          python3 scripts/release.py > next.json
+          echo "release=$(jq -r .release next.json)" >> "$GITHUB_OUTPUT"
+          echo "version=$(jq -r .version next.json)" >> "$GITHUB_OUTPUT"
+          jq -r .notes next.json > notes.md
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notes
+          path: notes.md
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write       # Sigstore keyless signing
+      attestations: write   # build provenance
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      - name: Set the version
+        run: |
+          sed -i "s/^__version__ = .*/__version__ = \"${VERSION}\"/" src/opstend/__init__.py
+          (cd web && npm version --no-git-tag-version "${VERSION}" >/dev/null)
+      - run: npm ci && npm run build
+        working-directory: web
+      - run: uv build --wheel && uv build --sdist
+      - name: Collect release files
+        run: |
+          mkdir release
+          cp dist/* packaging/install.sh release/
+          (cd release && sha256sum -- * > SHA256SUMS)
+      - uses: sigstore/gh-action-sigstore-python@790bc6befb9d733738f18d8f895854b453640ec9 # v3.5.0
+        with:
+          inputs: release/SHA256SUMS release/*.whl release/install.sh
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*.whl
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: release/
+
+  publish:
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+      - name: Create the GitHub release
+        run: |
+          gh release create "v${VERSION}" artifacts/release/* \
+            --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" \
+            --title "OpsTend ${VERSION}" --notes-file artifacts/notes/notes.md --latest
+
+  architectures:
+    name: Install on ${{ matrix.platform }}
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/arm/v7, linux/ppc64le, linux/s390x, linux/riscv64, linux/386]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+      - name: Install with the release wheel under emulation
+        run: |
+          docker run --rm --platform "${{ matrix.platform }}" -v "$PWD:/src:ro" debian:13 sh -c '
+            sh /src/packaging/install.sh --wheel /src/release/opstend-*-py3-none-any.whl --no-service'

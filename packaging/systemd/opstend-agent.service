@@ -1,0 +1,27 @@
+[Unit]
+Description=OpsTend host agent (privileged commands over a local socket)
+Documentation=https://github.com/grethel-labs/opstend
+After=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/opt/opstend/current/bin/opstend agent
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=opstend
+RuntimeDirectoryMode=0750
+# The agent runs package managers and container tools, so it needs root. It accepts
+# requests only from the opstend user over /run/opstend/agent.sock and only for the
+# commands on its allowlist; it opens no network ports.
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+LockPersonality=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

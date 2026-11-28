@@ -1,14 +1,20 @@
-.steward/
+# Python
 .venv/
-dist/
 __pycache__/
-*.pyc
-.pytest_cache/
+*.py[cod]
+.mypy_cache/
 .ruff_cache/
-node_modules/
-webapp/dist/
-src/steward/api/static/
-config/
-*.retry
-webapp/test-results/
-webapp/playwright-report/
+.pytest_cache/
+dist/
+build/
+
+# Web
+web/node_modules/
+web/test-results/
+web/playwright-report/
+src/opstend/api/static/
+
+# Local
+.env
+*.local.yaml
+/opstend.yaml
